@@ -1,0 +1,5 @@
+numpy
+psycopg2
+matplotlib
+librosa
+scipy
