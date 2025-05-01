@@ -41,7 +41,8 @@ def plotar_fft_de_um(audio_path):
     plt.grid(True)
     plt.show()
 
-# Execução direta
 if __name__ == "__main__":
-    pasta = r"C:\Users\%username%\Documents\0_TCI\TCC\similaridade-musical-por-fourier\app\audio"
+    username = os.environ["USERNAME"]  # Captura o nome do usuário logado
+    pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
     processar_pasta(pasta)
+
