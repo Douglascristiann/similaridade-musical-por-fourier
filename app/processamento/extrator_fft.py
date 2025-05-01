@@ -24,6 +24,7 @@ def preprocess_audio(file_path, target_sr=22050, duration=None, normalize=True, 
         audio = signal.filtfilt(b, a, audio)
 
     audio, _ = librosa.effects.trim(audio, top_db=20)
+    
     return audio, sr
 
 def extrair_fft(audio_path):
