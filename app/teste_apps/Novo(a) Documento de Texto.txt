@@ -1,0 +1,70 @@
+import librosa
+import librosa.display
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+
+def preprocess_audio(file_path, target_sr=22050, duration=30, normalize=True, noise_reduction=True):
+    """
+    Pré-processa um arquivo de áudio para análise.
+    
+    Parâmetros:
+        file_path (str): Caminho do arquivo de áudio.
+        target_sr (int): Taxa de amostragem de saída (padrão: 22050 Hz).
+        duration (int): Duração máxima em segundos (None para manter o original).
+        normalize (bool): Se True, normaliza o áudio para amplitude [-1, 1].
+        noise_reduction (bool): Se True, aplica redução de ruído.
+    
+    Retorna:
+        audio_clean (np.array): Áudio pré-processado.
+        sr (int): Taxa de amostragem.
+    """
+    # 1. Carregar o áudio
+    audio, sr = librosa.load(file_path, sr=target_sr, duration=duration, mono=True)
+    
+    # 2. Normalização (opcional)
+    if normalize:
+        audio = librosa.util.normalize(audio)
+    
+    # 3. Redução de ruído (opcional)
+    if noise_reduction:
+        # Filtro passa-banda (remove frequências muito altas/baixas)
+        lowcut = 80  # Hz (remove ruído de fundo)
+        highcut = 10000  # Hz (remove chiados)
+        nyquist = 0.5 * sr
+        low = lowcut / nyquist
+        high = highcut / nyquist
+        b, a = signal.butter(4, [low, high], btype='band')
+        audio = signal.filtfilt(b, a, audio)
+    
+    # 4. Remoção de silêncio (opcional)
+    audio, _ = librosa.effects.trim(audio, top_db=20)  # Corta silêncio no início/fim
+    
+    return audio, sr
+
+# --- Exemplo de uso ---
+if __name__ == "__main__":
+    # Carrega e pré-processa o áudio
+    file_path = "sua_musica.mp3"  # Substitua pelo seu arquivo
+    audio_clean, sr = preprocess_audio(file_path)
+    
+    # Visualiza o áudio original vs. pré-processado
+    plt.figure(figsize=(12, 6))
+    
+    # Áudio original (apenas para comparação)
+    audio_raw, _ = librosa.load(file_path, sr=sr)
+    plt.subplot(2, 1, 1)
+    librosa.display.waveshow(audio_raw, sr=sr, alpha=0.5, color='red')
+    plt.title("Áudio Original")
+    
+    # Áudio pré-processado
+    plt.subplot(2, 1, 2)
+    librosa.display.waveshow(audio_clean, sr=sr, color='blue')
+    plt.title("Áudio Pré-processado")
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Extrai MFCCs para validação
+    mfccs = librosa.feature.mfcc(y=audio_clean, sr=sr, n_mfcc=13)
+    print(f"Shape dos MFCCs: {mfccs.shape}")  # (n_mfcc, tempo)
