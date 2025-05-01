@@ -43,5 +43,5 @@ def plotar_fft_de_um(audio_path):
 
 # Execução direta
 if __name__ == "__main__":
-    pasta = r"C:\Users\silva\Documents\0_TCI\TCC\similaridade-musical-por-fourier\app\audio"
+    pasta = r"C:\Users\%username%\Documents\0_TCI\TCC\similaridade-musical-por-fourier\app\audio"
     processar_pasta(pasta)
