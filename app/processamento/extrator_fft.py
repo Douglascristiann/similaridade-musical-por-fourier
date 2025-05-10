@@ -85,14 +85,9 @@ def processar_completo(pasta):
 
 # Execução principal
 if __name__ == "__main__":
-   # username = os.environ.get("USERNAME") or os.getlogin()
-    #pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
-    #douglas teste
-    #pasta = fr"E:\Users\{username}\Documentos\GitHub\similaridade-musical-por-fourier"
-    #--------------------------------#
-    pasta = fr".\similaridade-musical-por-fourier\app\audio"
-
-
+    username = os.environ.get("USERNAME") or os.getlogin()
+    pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
+    
     if not os.path.exists(pasta):
         print(f"❌ Caminho não encontrado: {pasta}")
     else:
