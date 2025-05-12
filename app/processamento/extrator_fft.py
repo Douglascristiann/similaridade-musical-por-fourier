@@ -38,7 +38,8 @@ def extrair_caracteristicas(audio_path, n_frequencias=20):
     caracteristicas = freqs[indices_top]
     return np.sort(caracteristicas)
 
-def plotar_spectrograma(y, sr, titulo):
+def plotar_spectrograma(y, sr, titulo, salvar_em=None):
+
     plt.figure(figsize=(10, 4))
     S = librosa.stft(y)
     S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
@@ -46,7 +47,17 @@ def plotar_spectrograma(y, sr, titulo):
     plt.colorbar(format="%+2.0f dB")
     plt.title(f"Spectrograma: {titulo}")
     plt.tight_layout()
-    plt.show()
+
+    if salvar_em is None:
+        salvar_em = f"/home/douglascristian/Documentos/GitHUB/similaridade-musical-por-fourier/app/cache/{titulo}_spectrograma.png"
+    
+    if salvar_em:
+        plt.savefig(salvar_em)
+        print(f"📸 Espectrograma salvo em: {salvar_em}")
+    else:
+        plt.show()
+    
+    plt.close()
 
 def comparar_musicas(vetor1, vetor2):
     return euclidean(vetor1, vetor2)
@@ -87,6 +98,8 @@ def processar_completo(pasta):
 if __name__ == "__main__":
     username = os.environ.get("USERNAME") or os.getlogin()
     pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
+    
+    #pasta = fr"/home/douglascristian/Documentos/GitHUB/similaridade-musical-por-fourier/app/audio"
     
     if not os.path.exists(pasta):
         print(f"❌ Caminho não encontrado: {pasta}")
