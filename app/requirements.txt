@@ -3,3 +3,4 @@ psycopg2
 matplotlib
 librosa
 scipy
+os
