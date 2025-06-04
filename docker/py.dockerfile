@@ -9,4 +9,3 @@ COPY . .
 
 CMD [ "python", "./your-daemon-or-script.py" ]
 
-fft$I8P68
