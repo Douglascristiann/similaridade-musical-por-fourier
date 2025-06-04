@@ -1,1 +1,46 @@
+version: '3.9'
+
+services:
+  python-app:
+    build:
+      context: .
+      dockerfile: py.dockerfile
+    volumes:
+      - type: bind
+        source: /mnt/voldck/py/workdir
+        target: /app
+    container_name: python-app
+
+  jupyter:
+    image: jupyter/base-notebook:latest
+    ports:
+      - "8888:8888"
+    volumes:
+      - type: bind
+        source: /mnt/voldck/py/workdir
+        target: /home/jovyan/work
+    container_name: jupyter-notebook
+
+  postgres:
+    image: postgres:latest
+    env_file:
+      - .env
+    volumes:
+      - type: bind
+        source: /mnt/voldck/pg/
+        target: /var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    container_name: postgres-db
+
+  apache:
+    image: httpd:latest
+    volumes:
+      - www:/usr/local/apache2/htdocs/
+    ports:
+      - "8080:80"
+    container_name: apache-server
+
+volumes:
+  www:
 
