@@ -94,16 +94,28 @@ def processar_completo(pasta):
             except Exception as e:
                 print(f"Erro: {e}")
 
-# Execução principal
-if __name__ == "__main__":
+def executar():
     username = os.environ.get("USERNAME") or os.getlogin()
     pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
-    
-    #pasta = fr"/home/douglascristian/Documentos/GitHUB/similaridade-musical-por-fourier/app/audio"
-    
+
     if not os.path.exists(pasta):
         print(f"❌ Caminho não encontrado: {pasta}")
     else:
         processar_completo(pasta)
         recomendar_musicas(pasta)
+
+
+# mudado o contexto
+# Execução principal
+# if __name__ == "__main__":
+#     username = os.environ.get("USERNAME") or os.getlogin()
+#     pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
+    
+#     #pasta = fr"/home/douglascristian/Documentos/GitHUB/similaridade-musical-por-fourier/app/audio"
+    
+#     if not os.path.exists(pasta):
+#         print(f"❌ Caminho não encontrado: {pasta}")
+#     else:
+#         processar_completo(pasta)
+#         recomendar_musicas(pasta)
 
