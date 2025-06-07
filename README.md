@@ -8,11 +8,11 @@ Explorando a Transformada de Fourier como Alternativa aos Métodos Convencionais
 ### Pré-requisitos para ambiente local:
 
 - Ferramentas
--- Terraform (Versão utilizada: 1.12.1)
+    - Terraform (Versão utilizada: 1.12.1)
 
--- Azure CLI (Versão utilizada: 2.74.0)
+    - Azure CLI (Versão utilizada: 2.74.0)
 
--- VsCode: (extensões)
---- container Tools
+    - VsCode: (extensões)
+        - container Tools
 
 
