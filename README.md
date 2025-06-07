@@ -1,6 +1,7 @@
-# Uma Abordagem Baseada em Análise Espectral para Recomendação Musical:
+# Uma Abordagem Baseada em Análise Espectral para Recomendação Musical: 
 Explorando a Transformada de Fourier como Alternativa aos Métodos Convencionais
 
+## ⚙️ Em construção...
 
 ## 📦 Instalação
 
