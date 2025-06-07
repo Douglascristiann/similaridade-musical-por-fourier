@@ -4,7 +4,7 @@ services:
   python-app:
     build:
       context: .
-      dockerfile: py.dockerfile
+      dockerfile: docker/py.dockerfile
     volumes:
       - type: bind
         source: /mnt/voldck/py/workdir
@@ -36,11 +36,11 @@ services:
   apache:
     image: httpd:latest
     volumes:
-      - www:/usr/local/apache2/htdocs/
+      - type: bind
+      - source: /mnt/voldck/web/
+      - target: /usr/local/apache2/htdocs/
     ports:
       - "8080:80"
     container_name: apache-server
 
-volumes:
-  www:
 
