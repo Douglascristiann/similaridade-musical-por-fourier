@@ -36,9 +36,7 @@ services:
       context: .
       dockerfile: docker/web.dockerfile
     volumes:
-      - type: bind
-        source: /mnt/voldck/web/
-        target: /usr/local/apache2/htdocs/
+        - www:/usr/local/apache2/htdocs/
     ports:
       - "8080:80"
     container_name: apache-server
@@ -47,6 +45,7 @@ services:
 
 volumes:
   workdir-app:
+  www:
 
 networks:
   ctnet:
