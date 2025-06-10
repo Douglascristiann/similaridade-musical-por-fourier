@@ -1,13 +1,10 @@
-version: '3.9'
 services:
   python-app:
     build:
       context: .
       dockerfile: docker/py.dockerfile
     volumes:
-      - type: bind
-        source: /mnt/voldck/py/workdir
-        target: /usr/src/app
+      - workdir-app:/app
     container_name: python-app
     networks:
       - ctnet
@@ -17,16 +14,14 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - type: bind
-        source: /mnt/voldck/py/workdir
-        target: /home/jovyan/work
+      - workdir-app:/home/jovyan/work
     container_name: jupyter-notebook
     networks:
       - ctnet
   postgres:
     image: postgres:latest
     env_file:
-      - .env
+      - ./docker/.env
     volumes:
       - type: bind
         source: /mnt/voldck/pg/
@@ -49,6 +44,9 @@ services:
     container_name: apache-server
     networks:
       - ctnet
+
+volumes:
+  workdir-app:
 
 networks:
   ctnet:
