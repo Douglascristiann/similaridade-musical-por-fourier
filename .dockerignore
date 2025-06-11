@@ -1,4 +1,6 @@
 README.md
 .gitignore
 .vscode/
+_pycache_/
+
 

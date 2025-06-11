@@ -95,6 +95,8 @@ def processar_completo(pasta):
                 print(f"Erro: {e}")
 
 def executar():
+    print("FFT em execução...")
+    
     username = os.environ.get("USERNAME") or os.getlogin()
     pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
 

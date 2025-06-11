@@ -2,24 +2,18 @@
 import sys
 import os
 
-# Adiciona o diretório 'processamento' ao path
-caminho_superior = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'processamento'))
-if caminho_superior not in sys.path:
-    sys.path.append(caminho_superior)
+# Caminho absoluto para o diretório 'processamento'
+extrator_fft_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'processamento'))
 
-from extrator_fft import executar
+# Adiciona o diretório ao sys.path se ainda não estiver lá
+if extrator_fft_path not in sys.path:
+    sys.path.append(extrator_fft_path)
 
-def main():
-    print("🎶 Bem-vindo ao sistema de recomendação musical baseado em FFT 🎶")
-    resposta = input("Deseja iniciar o sistema de recomendação? [s/n]: ").strip().lower()
-
-    if resposta == 's':
-        print("\n🔄 Iniciando processamento...\n")
-        executar()
-    else:
-        print("❌ Execução cancelada pelo usuário.")
-
-if __name__ == "__main__":
-    main()
+try:
+    from extrator_fft import executar
+except ModuleNotFoundError as e:
+    print(f"❌ Erro ao importar o módulo 'extrator_fft': {e}")
+    print("💡 Verifique se o arquivo 'extrator_fft.py' existe dentro da pasta 'processamento'.")
+    sys.exit(1)  # Encerra o programa com erro
 
 
