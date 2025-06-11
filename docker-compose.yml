@@ -10,14 +10,15 @@ services:
       - ctnet
 
   jupyter:
-    image: jupyter/base-notebook:latest
+    image: quay.io/jupyter/base-notebook
     ports:
-      - "8888:8888"
+      - "8889:8888"
     volumes:
       - workdir-app:/home/jovyan/work
     container_name: jupyter-notebook
     networks:
       - ctnet
+    command: start-notebook.py --NotebookApp.token='my-token'  
   postgres:
     image: postgres:latest
     env_file:
