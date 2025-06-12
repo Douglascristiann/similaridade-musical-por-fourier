@@ -1,15 +1,15 @@
-FROM python:3.11
+FROM quay.io/jupyter/base-notebook
 
-WORKDIR /app
+WORKDIR /home/jovyan/work
 
 COPY app/requirements.txt .
 
 RUN python -m pip install --upgrade pip
-
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ./app /app/
+COPY ./app /home/jovyan/work/
 
-
-CMD [ "python", "./main.py" ]
-
+# Corrige permissões para que jovyan possa escrever
+USER root
+RUN chown -R jovyan:users /home/jovyan
+USER jovyan

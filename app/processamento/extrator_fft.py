@@ -49,7 +49,7 @@ def plotar_spectrograma(y, sr, titulo, salvar_em=None):
     plt.tight_layout()
 
     if salvar_em is None:
-        salvar_em = f"/home/douglascristian/Documentos/GitHUB/similaridade-musical-por-fourier/app/cache/{titulo}_spectrograma.png"
+        salvar_em = f"/home/jovyan/work/cache/{titulo}_spectrograma.png"
     
     if salvar_em:
         plt.savefig(salvar_em)
@@ -94,30 +94,34 @@ def processar_completo(pasta):
             except Exception as e:
                 print(f"Erro: {e}")
 
-def executar():
-    print("FFT em execução...")
+
+# --------------- USO DO MAIN EXTERNO ----------------------------------#
+# def executar():
+#     print("FFT em execução...")
     
-    username = os.environ.get("USERNAME") or os.getlogin()
-    pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
-
-    if not os.path.exists(pasta):
-        print(f"❌ Caminho não encontrado: {pasta}")
-    else:
-        processar_completo(pasta)
-        recomendar_musicas(pasta)
-
-
-# mudado o contexto
-# Execução principal
-# if __name__ == "__main__":
 #     username = os.environ.get("USERNAME") or os.getlogin()
 #     pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
-    
-#     #pasta = fr"/home/douglascristian/Documentos/GitHUB/similaridade-musical-por-fourier/app/audio"
-    
+
 #     if not os.path.exists(pasta):
 #         print(f"❌ Caminho não encontrado: {pasta}")
 #     else:
 #         processar_completo(pasta)
 #         recomendar_musicas(pasta)
+
+#-----------------------------------------------------------------------------
+
+#mudado o contexto
+#Execução principal
+if __name__ == "__main__":
+    username = os.environ.get("USERNAME") or os.getlogin()
+    pasta = fr"C:\Users\{username}\Documents\GitHub\similaridade-musical-por-fourier\app\audio"
+    
+    # USO NO DOCKER (HOSPEDAGEM)
+    #pasta = fr"/home/jovyan/work/audio"
+    
+    if not os.path.exists(pasta):
+        print(f"❌ Caminho não encontrado: {pasta}")
+    else:
+        processar_completo(pasta)
+        recomendar_musicas(pasta)
 

@@ -1,24 +1,26 @@
 services:
+  # python-app:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/py.dockerfile
+  #   volumes:
+  #     - workdir-app:/app
+  #   container_name: python-app
+  #   networks:
+  #     - ctnet
+
   python-app:
     build:
       context: .
       dockerfile: docker/py.dockerfile
-    volumes:
-      - workdir-app:/app
-    container_name: python-app
-    networks:
-      - ctnet
-
-  jupyter:
-    image: quay.io/jupyter/base-notebook
     ports:
       - "8889:8888"
     volumes:
-      - workdir-app:/home/jovyan/work
+      - workdir-app:/home/jovyan/work:rw
     container_name: jupyter-notebook
     networks:
       - ctnet
-    command: start-notebook.py --NotebookApp.token='my-token'  
+    command: start-notebook.py --NotebookApp.token='my-token'
   postgres:
     image: postgres:latest
     env_file:
