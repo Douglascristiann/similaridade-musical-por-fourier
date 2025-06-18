@@ -3,6 +3,15 @@ import numpy as np
 import librosa
 import soundfile as sf
 
+
+
+# teste de conexão com o banco de dados
+resultado = conectar_e_criar()
+print(resultado)
+
+
+
+
 # Carrega o áudio original
 input_path = "entrada/004.mp3"
 y, sr = librosa.load(input_path, sr=None)
