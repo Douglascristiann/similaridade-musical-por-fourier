@@ -11,6 +11,11 @@ Explorando a Transformada de Fourier como Alternativa aos Métodos Convencionais
     - Terraform (Versão utilizada: 1.12.1)
     - Azure CLI (Versão utilizada: 2.74.0)
     - VsCode: (extensões)
-        - container Tools
+        - Container Tools
+        - Azure Resources
+        - Azure Virtual Machines
+
+
+### Pré-requisitos VM & versões recomentadas:
 
 
