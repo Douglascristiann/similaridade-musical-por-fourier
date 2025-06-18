@@ -16,8 +16,6 @@ def executar_testes():
     
 
 
-
-
 # teste de conexão com o banco de dados
 # resultado = conectar_e_criar()
 # print(resultado)

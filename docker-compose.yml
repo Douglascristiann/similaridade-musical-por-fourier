@@ -26,9 +26,7 @@ services:
     env_file:
       - ./docker/.env
     volumes:
-      - type: bind
-        source: /mnt/voldck/pg/
-        target: /var/lib/postgresql/data
+      - db:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     container_name: postgres-db
@@ -49,6 +47,7 @@ services:
 volumes:
   workdir-app:
   www:
+  db:
 
 networks:
   ctnet:
