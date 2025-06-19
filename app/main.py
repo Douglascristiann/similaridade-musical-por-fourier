@@ -14,11 +14,11 @@ def main():
         # Importa a função do arquivo preprocess_return.py
         from preprocess_return import executar_testes
 
-        print("✅ Executando testes do módulo preprocess_return...")
         executar_testes()
     except ModuleNotFoundError as e:
         print(f"❌ Erro ao importar o módulo 'preprocess_return': {e}")
         sys.exit(1)
+        
 
 if __name__ == "__main__":
     main()
