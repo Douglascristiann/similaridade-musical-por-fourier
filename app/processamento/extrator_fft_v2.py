@@ -1,185 +1,197 @@
 import os
+import time
+import json
+import hmac
+import base64
+import hashlib
+import requests
 import numpy as np
 import librosa
-import librosa.display
-import matplotlib.pyplot as plt
-from scipy import signal
-from scipy.spatial.distance import euclidean
 import mysql.connector
+from scipy.spatial.distance import euclidean
+from tinytag import TinyTag
 
-# Configurações do banco
-USER = "root"
-PASSWORD = "managerffti8p68"
-DB = "dbmusicadata"
-HOST = "db"
-PORT = 3306
+# Configuração do banco de dados
+DB_CONFIG = {
+    "user": "root",
+    "password": "managerffti8p68",
+    "host": "db",
+    "port": 3306,
+    "database": "dbmusicadata"
+}
 
-# ---------- FUNÇÕES DE BANCO DE DADOS ------------------
+# ACRCloud
+ACR_CFG = {
+    'host': 'identify-us-west-2.acrcloud.com',
+    'access_key': 'YkVlGYYdQrGM9qk0',
+    'access_secret': 'rUU8B5mPIrTZGcFViDzgHXOuaCzVG7Qv'
+}
+
+# AudD
+AUDD_TOKEN = "194e979e8e5d531ffd6d54941f5b7977"
+
+def conectar():
+    return mysql.connector.connect(**DB_CONFIG)
 
 def criar_tabela():
-    try:
-        conn = mysql.connector.connect(user=USER, password=PASSWORD, host=HOST, port=PORT, database=DB)
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tb_musicas (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                nome VARCHAR(255) NOT NULL UNIQUE,
-                caminho TEXT,
-                frequencias TEXT NOT NULL,
-                criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("📦 Tabela verificada/criada com sucesso.")
-    except Exception as e:
-        print(f"❌ Erro ao criar tabela: {e}")
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tb_musicas (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    nome VARCHAR(255) NOT NULL UNIQUE,
+                    caminho TEXT,
+                    frequencias TEXT NOT NULL,
+                    artista VARCHAR(255),
+                    titulo VARCHAR(255),
+                    album VARCHAR(255),
+                    genero VARCHAR(255),
+                    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.commit()
 
 def musica_existe(nome):
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM tb_musicas WHERE nome = %s", (nome,))
+            return cur.fetchone() is not None
+
+def inserir_musica(nome, caminho, freq, artista, titulo, album, genero):
+    if musica_existe(nome):
+        print(f"⚠️ Música '{nome}' já cadastrada.")
+        return
+    freq_str = ",".join(map(str, freq))
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO tb_musicas (nome, caminho, frequencias, artista, titulo, album, genero)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (nome, caminho, freq_str, artista, titulo, album, genero))
+            conn.commit()
+            print(f"✅ Inserida: {nome}")
+
+def assinar_acr(timestamp):
+    s = "\n".join(["POST", "/v1/identify", ACR_CFG['access_key'], "audio", "1", str(timestamp)])
+    h = hmac.new(ACR_CFG['access_secret'].encode(), s.encode(), hashlib.sha1).digest()
+    return base64.b64encode(h).decode()
+
+def identificar_acr(caminho):
+    timestamp = int(time.time())
+    signature = assinar_acr(timestamp)
+    url = f"https://{ACR_CFG['host']}/v1/identify"
+
+    with open(caminho, 'rb') as f:
+        sample = f.read()
+
+    payload = {
+        "access_key": ACR_CFG['access_key'],
+        "timestamp": timestamp,
+        "signature": signature,
+        "data_type": "audio",
+        "signature_version": "1",
+        "sample_bytes": len(sample)
+    }
+    files = {"sample": sample}
+
     try:
-        conn = mysql.connector.connect(user=USER, password=PASSWORD, host=HOST, port=PORT, database=DB)
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM tb_musicas WHERE nome = %s", (nome,))
-        resultado = cur.fetchone()[0]
-        cur.close()
-        conn.close()
-        return resultado > 0
+        res = requests.post(url, data=payload, files=files, timeout=10)
+        data = res.json()
+        music = data.get("metadata", {}).get("music", [])
+        if music and music[0].get("score", 0) >= 80:
+            m = music[0]
+            return (
+                m["artists"][0]["name"],
+                m["title"],
+                m.get("album", {}).get("name", "Desconhecido"),
+                m.get("genres", [{}])[0].get("name", "Desconhecido")
+            )
     except Exception as e:
-        print(f"❌ Erro ao verificar existência: {e}")
-        return False
+        print(f"❌ Erro ACRCloud: {e}")
+    return None
 
-def inserir_musica_banco(nome, caminho, frequencias):
+def identificar_audd(caminho):
     try:
-        if musica_existe(nome):
-            print(f"⚠️ Música '{nome}' já está cadastrada. Pulando.")
-            return
-        conn = mysql.connector.connect(user=USER, password=PASSWORD, host=HOST, port=PORT, database=DB)
-        cur = conn.cursor()
-        freq_str = ",".join(map(str, frequencias))
-        cur.execute("""
-            INSERT INTO tb_musicas (nome, caminho, frequencias)
-            VALUES (%s, %s, %s)
-        """, (nome, caminho, freq_str))
-        conn.commit()
-        cur.close()
-        conn.close()
-        print(f"✅ Música '{nome}' inserida com sucesso.")
+        files = {'file': open(caminho, 'rb')}
+        data = {'api_token': AUDD_TOKEN, 'return': 'apple_music,spotify'}
+        res = requests.post('https://api.audd.io/', data=data, files=files, timeout=10)
+        r = res.json()
+        if r.get("status") == "success" and r.get("result"):
+            result = r["result"]
+            return (
+                result.get("artist", "Desconhecido"),
+                result.get("title", "Desconhecido"),
+                result.get("album", "Desconhecido"),
+                result.get("genre", "Desconhecido")
+            )
     except Exception as e:
-        print(f"❌ Erro ao inserir no banco: {e}")
+        print(f"❌ Erro AudD: {e}")
+    return None
 
-def carregar_musicas_do_banco():
+def identificar_metadado(caminho):
     try:
-        conn = mysql.connector.connect(user=USER, password=PASSWORD, host=HOST, port=PORT, database=DB)
-        cur = conn.cursor()
-        cur.execute("SELECT nome, frequencias FROM tb_musicas")
-        dados = cur.fetchall()
-        cur.close()
-        conn.close()
-        musicas = {}
-        for nome, freq_str in dados:
-            freqs = list(map(float, freq_str.split(",")))
-            musicas[nome] = freqs
-        return musicas
-    except Exception as e:
-        print(f"❌ Erro ao carregar músicas do banco: {e}")
-        return {}
+        tag = TinyTag.get(caminho)
+        return (
+            tag.artist or "Desconhecido",
+            tag.title or "Desconhecido",
+            tag.album or "Desconhecido",
+            tag.genre or "Desconhecido"
+        )
+    except:
+        return ("Desconhecido",) * 4
 
-# --------- PROCESSAMENTO DE ÁUDIO ------------------
+def reconhecer_musica(caminho):
+    for metodo in [identificar_acr, identificar_audd, identificar_metadado]:
+        resultado = metodo(caminho)
+        if resultado and any(r != "Desconhecido" for r in resultado):
+            print(f"🔍 Reconhecida: {resultado[0]} - {resultado[1]}")
+            return resultado
+    return ("Desconhecido",) * 4
 
-def preprocess_audio(file_path, target_sr=22050, duration=None, normalize=True, noise_reduction=True):
-    audio, sr = librosa.load(file_path, sr=target_sr, duration=duration, mono=True)
-    if normalize:
-        audio = librosa.util.normalize(audio)
-    if noise_reduction:
-        lowcut = 80
-        highcut = 10000
-        nyquist = 0.5 * sr
-        low = lowcut / nyquist
-        high = highcut / nyquist
-        b, a = signal.butter(4, [low, high], btype='band')
-        audio = signal.filtfilt(b, a, audio)
-    audio, _ = librosa.effects.trim(audio, top_db=20)
-    return audio, sr
+def preprocess_audio(path, sr=22050):
+    y, _ = librosa.load(path, sr=sr, mono=True)
+    y = librosa.util.normalize(y)
+    y, _ = librosa.effects.trim(y, top_db=20)
+    return y, sr
 
-def extrair_fft(audio_path):
-    y, sr = preprocess_audio(audio_path)
+def extrair_caracteristicas(path, n=20):
+    y, sr = preprocess_audio(path)
     fft_result = np.fft.fft(y)
     freqs = np.fft.fftfreq(len(fft_result), 1 / sr)
-    magnitudes = np.abs(fft_result)
-    metade = len(freqs) // 2
-    return freqs[:metade], magnitudes[:metade], y, sr
+    mags = np.abs(fft_result)
+    top_indices = np.argsort(mags)[-n:]
+    return np.sort(freqs[top_indices])
 
-def extrair_caracteristicas(audio_path, n_frequencias=20):
-    freqs, mags, _, _ = extrair_fft(audio_path)
-    indices_top = np.argsort(mags)[-n_frequencias:]
-    caracteristicas = freqs[indices_top]
-    return np.sort(caracteristicas)
+def carregar_musicas():
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT nome, frequencias FROM tb_musicas")
+            rows = cur.fetchall()
+    return {nome: list(map(float, freq_str.split(","))) for nome, freq_str in rows}
 
-def plotar_spectrograma(y, sr, titulo, salvar_em=None):
-    plt.figure(figsize=(10, 4))
-    S = librosa.stft(y)
-    S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
-    librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='hz', cmap='magma')
-    plt.colorbar(format="%+2.0f dB")
-    plt.title(f"Spectrograma: {titulo}")
-    plt.tight_layout()
-    if salvar_em is None:
-        salvar_em = f"/home/jovyan/work/cache/{titulo}_spectrograma.png"
-    if salvar_em:
-        plt.savefig(salvar_em)
-        print(f"📸 Espectrograma salvo em: {salvar_em}")
+def recomendar_musica(nome_base, vetor_base):
+    musicas = carregar_musicas()
+    candidatos = [(nome, euclidean(vetor_base, vetor)) for nome, vetor in musicas.items() if nome != nome_base]
+    if candidatos:
+        recomendado, dist = min(candidatos, key=lambda x: x[1])
+        print(f"🎯 Recomendação: {recomendado} (distância: {dist:.2f})")
     else:
-        plt.show()
-    plt.close()
+        print("⚠️ Nenhuma outra música cadastrada.")
 
-# ---------- RECOMENDAÇÃO DE MÚSICAS ------------------
-
-def comparar_musicas(vetor1, vetor2):
-    return euclidean(vetor1, vetor2)
-
-def recomendar_para_nova_musica(nome_nova, vetor_nova):
-    musicas_banco = carregar_musicas_do_banco()
-    distancias = []
-    
-    for nome_ref, vetor_ref in musicas_banco.items():
-        if nome_ref == nome_nova:
-            continue  # evita comparar com a própria música
-        d = comparar_musicas(vetor_nova, vetor_ref)
-        distancias.append((nome_ref, d))
-
-    distancias.sort(key=lambda x: x[1])
-    
-    if distancias:
-        recomendado = distancias[0]
-        print(f"🎯 Música mais similar à '{nome_nova}': '{recomendado[0]}' (distância: {recomendado[1]:.2f})")
-    else:
-        print(f"⚠️ Nenhuma outra música no banco para comparar com '{nome_nova}'.")
-
-# ---------- PROCESSAMENTO EM LOTE ------------------
-
-def processar_completo(pasta):
+def processar_pasta(pasta):
+    criar_tabela()
     for arquivo in os.listdir(pasta):
-        if arquivo.endswith(('.mp3', '.wav')):
+        if arquivo.lower().endswith((".mp3", ".wav")):
             caminho = os.path.join(pasta, arquivo)
-            print(f"\n🎧 Processando: {arquivo}")
-            try:
-                _, _, y, sr = extrair_fft(caminho)
-                plotar_spectrograma(y, sr, arquivo)
-
-                caracteristicas = extrair_caracteristicas(caminho)
-                inserir_musica_banco(arquivo, caminho, caracteristicas)
-                recomendar_para_nova_musica(arquivo, caracteristicas)
-
-            except Exception as e:
-                print(f"❌ Erro ao processar '{arquivo}': {e}")
-
-# ---------- EXECUÇÃO PRINCIPAL ------------------
+            print(f"\n🎵 Processando: {arquivo}")
+            freq = extrair_caracteristicas(caminho)
+            artista, titulo, album, genero = reconhecer_musica(caminho)
+            inserir_musica(arquivo, caminho, freq, artista, titulo, album, genero)
+            recomendar_musica(arquivo, freq)
 
 if __name__ == "__main__":
-    criar_tabela()
-    pasta = "/home/jovyan/work/audio"  # caminho dentro do container ou máquina local
+    pasta = "/home/jovyan/work/audio"
     if not os.path.exists(pasta):
-        print(f"❌ Caminho não encontrado: {pasta}")
+        print(f"❌ Pasta não encontrada: {pasta}")
     else:
-        processar_completo(pasta)
+        processar_pasta(pasta)
