@@ -1,22 +1,22 @@
-import psycopg2
+import mysql.connector
 
 # Configurações de conexão
-USER = "sa"
-PASSWORD = "fft$i8p68"
-DB = "fftapp"
-HOST = "postgres-db"  # ou IP do servidor PostgreSQL
-PORT = "5432"        # padrão do PostgreSQL
+USER = "root"
+PASSWORD = "managerffti8p68"
+DB = "dbmusicadata"
+HOST = "db"   # ou IP do servidor MySQL
+PORT = "3306"       # padrão do MySQL
 
 # Conectando ao banco
 def conectar_e_criar():
     try:
         # Conectar ao banco
-        conn = psycopg2.connect(
-            dbname=DB,
+        conn = mysql.connector.connect(
             user=USER,
             password=PASSWORD,
             host=HOST,
-            port=PORT
+            port=PORT,
+            database=DB
         )
 
         cur = conn.cursor()
@@ -24,7 +24,7 @@ def conectar_e_criar():
         # Criar tabela
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tb_teste (
-                id SERIAL PRIMARY KEY,
+                id INT AUTO_INCREMENT PRIMARY KEY,
                 nome TEXT NOT NULL
             );
         """)

@@ -21,16 +21,21 @@ services:
     networks:
       - ctnet
     command: start-notebook.py --NotebookApp.token='my-token'
-  postgres:
-    image: postgres:latest
+  db:
+    image: mysql
     env_file:
       - ./docker/.env
     volumes:
-      - db:/var/lib/postgresql/data
+      - mysql:/var/lib/mysql
+    restart: always
     ports:
-      - "5432:5432"
-    container_name: postgres-db
-    networks:
+      - '3306:3306'
+    environment: 
+      MYSQL_DATABASE: dbmusicadata
+      MYSQL_USER: sa
+      MYSQL_PASSWORD: ffti8p68
+      MYSQL_ROOT_PASSWORD: managerffti8p68
+    networks: 
       - ctnet
   apache:
     build:
@@ -47,7 +52,7 @@ services:
 volumes:
   workdir-app:
   www:
-  db:
+  mysql:
 
 networks:
   ctnet:
