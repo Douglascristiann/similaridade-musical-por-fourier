@@ -1,6 +1,9 @@
 numpy
-mysql-connector-python
-matplotlib
-librosa
-scipy
-spotipy
+shazamio==0.3.9
+librosa==0.10.0
+numpy==1.24.3
+matplotlib==3.7.1
+scikit-learn==1.2.2
+requests==2.31.0
+tinytag==1.8.1
+mysql-connector-python==8.0.33
