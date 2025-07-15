@@ -31,10 +31,10 @@ AUDD_TOKEN = "194e979e8e5d531ffd6d54941f5b7977"
 
 # Define o número esperado de características após a extração
 # n_mfcc (40) * 3 (mfcc, delta, delta2) + chroma (12) + tonnetz (6) + contrast (7) + tempo (1)
-EXPECTED_FEATURE_LENGTH = 40 * 3 + 12 + 6 + 7 + 1 # = 120 + 12 + 6 + 7 + 1 = 146
+EXPECTED_FEATURE_LENGTH = 40 * 3 + 12 + 6 + 6 + 1 + 1 + 1 + 1 + 1  # = 161
 
 # Nome da tabela do banco de dados a ser usada
-DB_TABLE_NAME = "tb_musicas_v2" # Usaremos a nova tabela v2
+DB_TABLE_NAME = "tb_musicas_teste" # Usaremos a nova tabela v2
 
 # =================== BANCO DE DADOS ===================
 def conectar():
@@ -262,12 +262,15 @@ def preprocess_audio(path, sr=22050):
         return None, None
 
 def extrair_features_completas(y, sr):
-    """Extrai um conjunto completo de características de áudio."""
-    if y is None or sr is None:
-        return np.array([]) # Retorna array vazio se pré-processamento falhou
+    """
+    Extrai um conjunto completo de características de áudio para análise musical e comparação de similaridade.
+    Inclui MFCCs, cromas, harmonia, contraste, tempo, energia, brilho e taxa de cruzamentos por zero.
+    """
+    if y is None or sr is None or len(y) < sr * 0.2:
+        return np.zeros(EXPECTED_FEATURE_LENGTH)
 
     try:
-        # MFCCs (Mel-frequency cepstral coefficients) e suas derivadas
+        # MFCC e derivadas
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
         mfcc_delta = librosa.feature.delta(mfcc)
         mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
@@ -276,149 +279,172 @@ def extrair_features_completas(y, sr):
         mfcc_delta_mean = np.mean(mfcc_delta, axis=1)
         mfcc_delta2_mean = np.mean(mfcc_delta2, axis=1)
 
-        # Chroma Feature (representação da intensidade de cada uma das 12 classes de pitch cromáticas)
+        # Chroma
         chroma = np.mean(librosa.feature.chroma_stft(y=y, sr=sr), axis=1)
-        # Tonnetz (rede de tons, representa a estrutura harmônica)
+
+        # Tonnetz
         tonnetz = np.mean(librosa.feature.tonnetz(y=librosa.effects.harmonic(y), sr=sr), axis=1)
-        # Contraste Espectral (diferença entre picos e vales do espectro)
+
+        # Spectral Contrast
         contrast = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr), axis=1)
-        
+
         # Tempo (BPM)
         try:
             tempo_val = librosa.beat.tempo(y=y, sr=sr)[0]
         except Exception as e:
-            print(f"⚠️ Erro ao calcular tempo, usando 0: {e}")
+            print(f"⚠️ Erro ao calcular tempo: {e}")
             tempo_val = 0.0
 
-        features_list = [mfcc_mean, mfcc_delta_mean, mfcc_delta2_mean, chroma, tonnetz, contrast, [tempo_val]]
-        
-        # Concatena todas as características em um único vetor
-        final_features = np.concatenate(features_list)
-        
-        # Garante que o vetor final tenha o tamanho esperado.
-        # Se for menor (ex: áudio muito curto), preenche com zeros. Se for maior (muito raro), trunca.
+        # Root Mean Square Energy
+        rms = np.mean(librosa.feature.rms(y=y))
+
+        # Zero-Crossing Rate
+        zcr = np.mean(librosa.feature.zero_crossing_rate(y))
+
+        # Spectral Rolloff
+        rolloff = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
+
+        # Spectral Bandwidth
+        bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
+
+        # Junta tudo
+        features = [
+            mfcc_mean,
+            mfcc_delta_mean,
+            mfcc_delta2_mean,
+            chroma,
+            tonnetz,
+            contrast,
+            [tempo_val],
+            [rms],
+            [zcr],
+            [rolloff],
+            [bandwidth]
+        ]
+
+        final_features = np.concatenate(features)
+
+        # Ajuste de tamanho
         if len(final_features) != EXPECTED_FEATURE_LENGTH:
-            print(f"⚠️ Ajustando tamanho do vetor de features: {len(final_features)} -> {EXPECTED_FEATURE_LENGTH}")
-            if len(final_features) < EXPECTED_FEATURE_LENGTH:
-                padding = np.zeros(EXPECTED_FEATURE_LENGTH - len(final_features))
-                final_features = np.concatenate([final_features, padding])
-            else:
-                final_features = final_features[:EXPECTED_FEATURE_LENGTH]
-        
+            print(f"⚠️ Ajustando vetor de features: {len(final_features)} → {EXPECTED_FEATURE_LENGTH}")
+            final_features = np.pad(final_features, (0, max(0, EXPECTED_FEATURE_LENGTH - len(final_features))))[:EXPECTED_FEATURE_LENGTH]
+
         return final_features
 
     except Exception as e:
         print(f"❌ Erro ao extrair features completas: {e}")
-        # Em caso de falha total na extração, retorna um vetor de zeros com o tamanho esperado
         return np.zeros(EXPECTED_FEATURE_LENGTH)
 
-def gerar_spectrograma(y, sr, path_out, artista=None, titulo=None):
-    """Gera e salva um espectrograma para o áudio."""
+def gerar_spectrograma(y, sr, path_out, artista=None, titulo=None, modo='stft'):
+    """
+    Gera e salva um espectrograma logarítmico para o áudio.
+    modo = 'stft' ou 'mel'
+    """
     if y is None or sr is None:
         print(f"❌ Não foi possível gerar espectrograma para {path_out}, áudio inválido.")
         return
 
+    # Garante que a pasta exista
+    os.makedirs(os.path.dirname(path_out), exist_ok=True)
+
     plt.figure(figsize=(10, 4))
-    S = librosa.stft(y)
-    S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
-    librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='log', cmap='magma')
+
+    if modo == 'mel':
+        S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
+        S_db = librosa.power_to_db(S, ref=np.max)
+        librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel', cmap='magma')
+    else:
+        S = librosa.stft(y)
+        S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+        librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='log', cmap='magma')
+
     plt.colorbar(format='%+2.0f dB')
-    plt.title(f"{titulo or 'Não Encontrado'} — {artista or 'Não Encontrado'}")
+    plt.title(f"{titulo or 'Sem Título'} — {artista or 'Desconhecido'}", fontsize=12)
     plt.tight_layout()
-    plt.savefig(path_out)
+    plt.savefig(path_out, dpi=120)
     plt.close()
 
+# def extrair_caracteristicas_e_spectrograma(path, output_folder, artista, titulo):
+#     """Combina o pré-processamento, extração de features e geração de espectrograma."""
+#     y, sr = preprocess_audio(path)
+#     if y is None:
+#         return np.zeros(EXPECTED_FEATURE_LENGTH) # Retorna zeros se pré-processamento falhou
+
+#     features = extrair_features_completas(y, sr)
+#     nome_arquivo = os.path.splitext(os.path.basename(path))[0]
+#     spectro_path = os.path.join(output_folder, f"{nome_arquivo}_spectrograma.png")
+#     gerar_spectrograma(y, sr, spectro_path, artista, titulo)
+#     print(f"📸 Espectrograma salvo em: {spectro_path}")
+#     return features
 def extrair_caracteristicas_e_spectrograma(path, output_folder, artista, titulo):
-    """Combina o pré-processamento, extração de features e geração de espectrograma."""
     y, sr = preprocess_audio(path)
     if y is None:
-        return np.zeros(EXPECTED_FEATURE_LENGTH) # Retorna zeros se pré-processamento falhou
+        return np.zeros(EXPECTED_FEATURE_LENGTH), None
 
     features = extrair_features_completas(y, sr)
     nome_arquivo = os.path.splitext(os.path.basename(path))[0]
     spectro_path = os.path.join(output_folder, f"{nome_arquivo}_spectrograma.png")
     gerar_spectrograma(y, sr, spectro_path, artista, titulo)
     print(f"📸 Espectrograma salvo em: {spectro_path}")
-    return features
+    return features, spectro_path
 
 # =================== RECOMENDAÇÃO ===================
-def calcular_similaridade(distancia, escala=0.5): # <-- ESCALA AJUSTADA PARA 0.5
+def calcular_similaridade(distancia, escala=0.95):
     """
-    Converte a distância (cosseno) em um percentual de similaridade.
-    Uma 'escala' menor torna a similaridade mais sensível à distância,
-    fazendo com que os percentuais caiam mais rapidamente, resultando em recomendações mais "rigorosas".
+    Converte a distância cosseno (ou outra) em uma pontuação percentual de similaridade.
+    Uma 'escala' menor → similaridade mais exigente.
     """
-    return round(np.exp(-distancia / escala) * 100, 1)
+    similaridade = np.exp(-distancia / escala) * 100
+    return round(min(100.0, similaridade), 1)
 
 # Variáveis globais para o StandardScaler e PCA
 # Serão inicializados e ajustados apenas UMA VEZ com todos os dados do banco
 GLOBAL_SCALER = None
 GLOBAL_PCA = None
 
-def inicializar_modelos_ml(vetores_caracteristicas):
+def aplicar_transformacoes(vetores, vetor_base):
     """
-    Inicializa e ajusta o StandardScaler e o PCA globalmente, uma única vez,
-    com base em todos os vetores de características disponíveis.
+    Aplica normalização e, se disponível, redução de dimensionalidade com PCA.
+    Retorna vetores transformados e vetor base transformado.
     """
-    global GLOBAL_SCALER, GLOBAL_PCA
+    vetores_norm = GLOBAL_SCALER.transform(np.array(vetores, dtype=np.float64))
+    vetor_base_norm = GLOBAL_SCALER.transform([vetor_base])
 
-    if len(vetores_caracteristicas) == 0:
-        print("⚠️ Sem vetores de características para inicializar os modelos ML. Pulando inicialização.")
-        GLOBAL_SCALER = None
-        GLOBAL_PCA = None
-        return
-
-    # Só inicializa e treina se ainda não foram (ou se foram resetados)
-    if GLOBAL_SCALER is None or GLOBAL_PCA is None:
-        print("Preparando modelos de StandardScaler e PCA...")
-        
-        # 1. NORMALIZAÇÃO: Escalonamento dos vetores de características
-        GLOBAL_SCALER = StandardScaler()
-        vetores_normalizados = GLOBAL_SCALER.fit_transform(vetores_caracteristicas)
-
-        # 2. REDUÇÃO DE DIMENSIONALIDADE com PCA
-        GLOBAL_PCA = PCA(n_components=0.95) # Retém componentes que explicam 95% da variância
-        
-        # Verificações de segurança para PCA (precisa de pelo menos 2 amostras/features)
-        if vetores_normalizados.shape[0] < 2:
-            print("⚠️ Poucas amostras para PCA. Pulando PCA para esta sessão.")
-            GLOBAL_PCA = None
-        elif vetores_normalizados.shape[1] < 2:
-             print("⚠️ Poucas features para PCA. Pulando PCA para esta sessão.")
-             GLOBAL_PCA = None
-        else:
-            GLOBAL_PCA.fit(vetores_normalizados)
-            print(f"📊 Dimensões originais: {vetores_caracteristicas.shape[1]}, Dimensões após PCA: {GLOBAL_PCA.n_components_}")
+    if GLOBAL_PCA is not None:
+        vetores_final = GLOBAL_PCA.transform(vetores_norm)
+        vetor_base_final = GLOBAL_PCA.transform(vetor_base_norm)
     else:
-        print("Modelos de StandardScaler e PCA já inicializados.")
+        vetores_final = vetores_norm
+        vetor_base_final = vetor_base_norm
+
+    return vetores_final, vetor_base_final
+
 
 def recomendar_knn(nome_base, vetor_base):
-    """Gera recomendações de músicas similares usando KNN."""
-    musicas = carregar_musicas() # Carrega TODAS as músicas com características consistentes da nova tabela
-    
+    """
+    Retorna uma lista de recomendações com título, artista, link e similaridade.
+    """
+    musicas = carregar_musicas()
     if len(musicas) <= 1:
-        print("⚠️ Não há músicas suficientes (com características consistentes) para recomendar.")
-        return
+        print("⚠️ Não há músicas suficientes.")
+        return []
 
     nomes, vetores, artistas, titulos, links = zip(*musicas)
 
     try:
         vetores_np = np.array(list(vetores), dtype=np.float64)
     except ValueError as e:
-        print(f"❌ Erro ao converter vetores para numpy array: {e}")
-        print("Isso geralmente acontece se as características armazenadas no banco de dados ainda tiverem tamanhos inconsistentes.")
-        print("Tente limpar e recarregar suas músicas na nova tabela.")
-        return
+        print(f"❌ Erro ao converter vetores: {e}")
+        return []
 
-    inicializar_modelos_ml(vetores_np) # Garante que modelos estão prontos
+    aplicar_transformacoes(vetores_np)
 
     if GLOBAL_SCALER is None:
-        print("❌ Modelos ML não foram inicializados. Não é possível recomendar.")
-        return
+        print("❌ Modelos ML não disponíveis.")
+        return []
 
     idx = nomes.index(nome_base) if nome_base in nomes else -1
 
-    # Cria cópias das listas para remover a música base sem afetar as originais
     vetores_comp = list(vetores)
     nomes_comp = list(nomes)
     artistas_comp = list(artistas)
@@ -426,7 +452,6 @@ def recomendar_knn(nome_base, vetor_base):
     links_comp = list(links)
 
     if idx >= 0:
-        # Remove a música base para não recomendá-la a si mesma
         vetores_comp.pop(idx)
         nomes_comp.pop(idx)
         artistas_comp.pop(idx)
@@ -434,109 +459,156 @@ def recomendar_knn(nome_base, vetor_base):
         links_comp.pop(idx)
 
     if not vetores_comp:
-        print("⚠️ Não há músicas suficientes para recomendar após remover a música base.")
-        return
+        return []
 
-    # Garante que o vetor base também seja um numpy array e do tipo correto
     vetor_base_np = np.array(vetor_base, dtype=np.float64)
-    # Garante que o vetor base tem o tamanho esperado
+
     if len(vetor_base_np) != EXPECTED_FEATURE_LENGTH:
-        print(f"❌ Erro: O vetor base '{nome_base}' tem tamanho incorreto ({len(vetor_base_np)}). Esperado: {EXPECTED_FEATURE_LENGTH}. Não é possível recomendar.")
-        return
+        print(f"❌ Tamanho do vetor base inválido: {len(vetor_base_np)}")
+        return []
 
-    # 1. NORMALIZAÇÃO: Usa o scaler GLOBAL já ajustado
-    vetores_normalizados = GLOBAL_SCALER.transform(np.array(vetores_comp, dtype=np.float64))
-    vetor_base_normalizado = GLOBAL_SCALER.transform([vetor_base_np])
+    # Aplica transformações
+    vetores_reduzidos, vetor_base_reduzido = aplicar_transformacoes(vetores_comp, vetor_base_np)
 
-    # 2. REDUÇÃO DE DIMENSIONALIDADE com PCA: Usa o PCA GLOBAL já ajustado (se disponível)
-    if GLOBAL_PCA is not None:
-        vetores_reduzidos = GLOBAL_PCA.transform(vetores_normalizados)
-        vetor_base_reduzido = GLOBAL_PCA.transform(vetor_base_normalizado)
-    else: # Se PCA não foi usado (ex: poucas amostras), continua com os vetores normalizados
-        vetores_reduzidos = vetores_normalizados
-        vetor_base_reduzido = vetor_base_normalizado
-
-    # 3. MODELO KNN: K-Nearest Neighbors com métrica de cosseno
-    # n_neighbors_val: Garante que não tente encontrar mais vizinhos do que existem
+    # KNN
     n_neighbors_val = min(3, len(vetores_reduzidos))
-    if n_neighbors_val == 0:
-        print("⚠️ Não há músicas suficientes para aplicar KNN. (Isso não deveria acontecer se já foi verificado antes)")
-        return
-
     model = NearestNeighbors(n_neighbors=n_neighbors_val, metric='cosine')
     model.fit(vetores_reduzidos)
     distancias, indices = model.kneighbors(vetor_base_reduzido)
 
-    print(f"🎯 Recomendações para '{nome_base}':")
+    # Retorna resultados
+    resultados = []
     for rank, (i, dist) in enumerate(zip(indices[0], distancias[0]), 1):
-        nome_exibido = titulos_comp[i] if titulos_comp[i] != "Não Encontrado" else nomes_comp[i]
-        link_txt = links_comp[i] if links_comp[i] != "Não Encontrado" else "Sem link"
         similaridade = calcular_similaridade(dist)
-        print(f"    {rank}. {nome_exibido} — {artistas_comp[i]} (link: {link_txt}) [similaridade: {similaridade:.1f}%]")
+        resultados.append({
+            "rank": rank,
+            "titulo": titulos_comp[i] if titulos_comp[i] != "Não Encontrado" else nomes_comp[i],
+            "artista": artistas_comp[i],
+            "link": links_comp[i],
+            "similaridade": similaridade
+        })
+
+    print(f"🎯 Recomendações para '{nome_base}':")
+    for rec in resultados:
+        print(f"    {rec['rank']}. {rec['titulo']} — {rec['artista']} (link: {rec['link']}) [similaridade: {rec['similaridade']}%]")
+
+    return resultados
+
 
 # =================== EXECUÇÃO ===================
-def processar_pasta(pasta, saida_spectrogramas):
+def processar_pasta(pasta, saida_spectrogramas, pasta_recomendacoes):
     """
     Processa todos os arquivos de áudio em uma pasta:
-    extrai características, reconhece metadados, salva no banco e gera recomendações.
+    - extrai características,
+    - reconhece metadados,
+    - salva no banco,
+    - gera espectrogramas,
+    - executa recomendações com gráfico.
     """
-    criar_tabela() # Garante que a tb_musicas_v2 exista
+    criar_tabela()
+
     if not os.path.exists(saida_spectrogramas):
         os.makedirs(saida_spectrogramas)
 
-    print("\nIniciando extração e salvamento de características de áudio...")
+    print("\n🔍 Iniciando extração de características...")
     for arquivo in os.listdir(pasta):
         if arquivo.lower().endswith((".mp3", ".wav")):
             caminho = os.path.join(pasta, arquivo)
-            print(f"🎵 Extraindo características para: {arquivo}")
+            print(f"🎵 Processando: {arquivo}")
+
             artista, titulo, album, genero, capa_album = asyncio.run(reconhecer_musica(caminho))
             link_youtube = buscar_youtube_link(artista, titulo)
-            caracs = extrair_caracteristicas_e_spectrograma(caminho, saida_spectrogramas, artista, titulo)
-            
-            # Só insere se as características têm o tamanho esperado (146)
+            caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, saida_spectrogramas, artista, titulo)
+
             if len(caracs) == EXPECTED_FEATURE_LENGTH:
                 inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)
             else:
-                print(f"❌ Pulando inserção de '{arquivo}' devido a características de tamanho inconsistente ({len(caracs)}).")
-    print("\nExtração e salvamento de características concluídos.")
+                print(f"❌ Vetor inconsistente para '{arquivo}' ({len(caracs)}), pulando.")
 
-    print("\nIniciando processo de recomendação...")
-    # Carrega todas as músicas válidas (com 146 features) UMA VEZ para otimizar
-    todas_musicas_validas = carregar_musicas() 
+    print("\n✅ Extração finalizada. Preparando recomendações...")
 
-    # Cria um dicionário para acesso rápido às características por nome de arquivo
-    caracteristicas_por_nome = {m[0]: m[1] for m in todas_musicas_validas}
+    todas_musicas_validas = carregar_musicas()
+    if len(todas_musicas_validas) < 2:
+        print("⚠️ Não há músicas suficientes para recomendar.")
+        return
 
-    # Inicializa os modelos ML (StandardScaler e PCA) com todos os dados válidos
-    if len(todas_musicas_validas) > 0:
-        vetores_para_fit = np.array([m[1] for m in todas_musicas_validas], dtype=np.float64)
-        inicializar_modelos_ml(vetores_para_fit)
+    vetores_para_fit = np.array([m[1] for m in todas_musicas_validas], dtype=np.float64)
+    nomes_validos = [m[0] for m in todas_musicas_validas]
 
-    # Agora, para cada arquivo na pasta, tenta gerar recomendações
-    for arquivo in os.listdir(pasta):
-        if arquivo.lower().endswith((".mp3", ".wav")):
-            nome_arquivo_completo = arquivo
-            caracs_musica_atual = caracteristicas_por_nome.get(nome_arquivo_completo)
-            
-            if caracs_musica_atual is not None:
-                # Validação final do tamanho do vetor base antes de recomendar
-                if len(caracs_musica_atual) == EXPECTED_FEATURE_LENGTH:
-                    print(f"\n✨ Gerando recomendações para: {nome_arquivo_completo}")
-                    recomendar_knn(nome_arquivo_completo, caracs_musica_atual)
-                else:
-                    print(f"❌ Pulando recomendação para '{nome_arquivo_completo}' devido a características de tamanho inconsistente ({len(caracs_musica_atual)}).")
-            else:
-                print(f"⚠️ Características para '{nome_arquivo_completo}' não encontradas (ou inconsistentes) na nova tabela. Pulando recomendação.")
+    # Usa o primeiro vetor como base só para aplicar_transformacoes (ajuste dos modelos globais)
+    vetor_base = todas_musicas_validas[0][1]
+    _, _ = aplicar_transformacoes(vetores_para_fit, vetor_base)
 
+    # Gera recomendações para cada música e salva o gráfico
+    pasta_plot = os.path.join(pasta, "recomendacoes_img")
+    os.makedirs(pasta_plot, exist_ok=True)
+
+    for nome_musica, vetor in zip(nomes_validos, vetores_para_fit):
+        if len(vetor) == EXPECTED_FEATURE_LENGTH:
+            print(f"\n✨ Gerando recomendações para: {nome_musica}")
+            recomendar_knn(nome_musica, vetor)
+
+            # Gera e salva gráfico de recomendações
+            caminho_plot = os.path.join(pasta_plot, f"{os.path.splitext(nome_musica)[0]}_recomendacoes.png")
+            plot_recomendacoes(nome_musica, vetor, caminho_plot)
+        else:
+            print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
+
+def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
+    """
+    Gera um gráfico com as recomendações mais próximas para uma música base e salva como imagem.
+    """
+    musicas = carregar_musicas()
+    nomes, vetores, artistas, titulos, links = zip(*musicas)
+
+    if nome_base not in nomes:
+        print(f"⚠️ Música base '{nome_base}' não encontrada.")
+        return
+
+    vetores_np = np.array(vetores, dtype=np.float64)
+    _, vetor_base_transformado = aplicar_transformacoes(vetores_np, vetor_base)
+
+    vetores_comp = [v for i, v in enumerate(vetores) if nomes[i] != nome_base]
+    nomes_comp = [n for n in nomes if n != nome_base]
+    titulos_comp = [t for i, t in enumerate(titulos) if nomes[i] != nome_base]
+    artistas_comp = [a for i, a in enumerate(artistas) if nomes[i] != nome_base]
+
+    vetores_comp_transf, _ = aplicar_transformacoes(vetores_comp, vetor_base)
+    model = NearestNeighbors(n_neighbors=min(5, len(vetores_comp)), metric="cosine")
+    model.fit(vetores_comp_transf)
+    distancias, indices = model.kneighbors(vetor_base_transformado)
+
+    nomes_plot = [f"{titulos_comp[i]} — {artistas_comp[i]}" for i in indices[0]]
+    similaridades = [calcular_similaridade(d) for d in distancias[0]]
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+    bars = plt.barh(nomes_plot, similaridades, color="skyblue")
+    plt.xlabel("Similaridade (%)")
+    plt.title(f"🎧 Recomendações para: {nome_base}")
+    plt.xlim(0, 100)
+    plt.gca().invert_yaxis()
+
+    # Adiciona os valores
+    for bar, sim in zip(bars, similaridades):
+        plt.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2, f"{sim:.1f}%", va='center')
+
+    plt.tight_layout()
+    plt.savefig(caminho_saida)
+    plt.close()
+    print(f"📊 Gráfico salvo em: {caminho_saida}")
 
 if __name__ == "__main__":
     pasta_audio = "/home/jovyan/work/audio"
     pasta_spectrogramas = "/home/jovyan/work/spectrogramas"
-    
+    pasta_recomendacoes = "/home/jovyan/work/spectrogramas/recomendacoes_img"
 
     # Garante que as pastas existam
+    os.makedirs(pasta_spectrogramas, exist_ok=True)
+    os.makedirs(pasta_recomendacoes, exist_ok=True)
+
     if not os.path.exists(pasta_audio):
         print(f"❌ Pasta de áudio não encontrada: {pasta_audio}")
         print("Por favor, crie a pasta e coloque suas músicas lá.")
     else:
-        processar_pasta(pasta_audio, pasta_spectrogramas)
+        processar_pasta(pasta_audio, pasta_spectrogramas, pasta_recomendacoes)
