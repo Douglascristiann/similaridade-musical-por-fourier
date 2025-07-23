@@ -34,7 +34,7 @@ AUDD_TOKEN = "194e979e8e5d531ffd6d54941f5b7977"
 EXPECTED_FEATURE_LENGTH = 40 * 3 + 12 + 6 + 6 + 1 + 1 + 1 + 1 + 1  # = 161
 
 # Nome da tabela do banco de dados a ser usada
-DB_TABLE_NAME = "tb_musicas_teste" # Usaremos a nova tabela v2
+DB_TABLE_NAME = "tb_musicas_v3" # Usaremos a nova tabela v2
 
 # =================== BANCO DE DADOS ===================
 def conectar():
@@ -421,9 +421,6 @@ def aplicar_transformacoes(vetores, vetor_base):
 
 
 def recomendar_knn(nome_base, vetor_base):
-    """
-    Retorna uma lista de recomendações com título, artista, link e similaridade.
-    """
     musicas = carregar_musicas()
     if len(musicas) <= 1:
         print("⚠️ Não há músicas suficientes.")
@@ -437,7 +434,10 @@ def recomendar_knn(nome_base, vetor_base):
         print(f"❌ Erro ao converter vetores: {e}")
         return []
 
-    aplicar_transformacoes(vetores_np)
+    vetor_base_np = np.array(vetor_base, dtype=np.float64)  # <<<<< COLOQUE ANTES!
+
+    # Aqui agora pode chamar
+    aplicar_transformacoes(vetores_np, vetor_base_np)
 
     if GLOBAL_SCALER is None:
         print("❌ Modelos ML não disponíveis.")
@@ -496,7 +496,7 @@ def recomendar_knn(nome_base, vetor_base):
 
 
 # =================== EXECUÇÃO ===================
-def processar_pasta(pasta, saida_spectrogramas, pasta_recomendacoes):
+def processar_pasta(pasta, saida_spectrogramas, pasta_plot):
     """
     Processa todos os arquivos de áudio em uma pasta:
     - extrai características,
@@ -535,12 +535,23 @@ def processar_pasta(pasta, saida_spectrogramas, pasta_recomendacoes):
     vetores_para_fit = np.array([m[1] for m in todas_musicas_validas], dtype=np.float64)
     nomes_validos = [m[0] for m in todas_musicas_validas]
 
-    # Usa o primeiro vetor como base só para aplicar_transformacoes (ajuste dos modelos globais)
+    global GLOBAL_SCALER, GLOBAL_PCA
+
+    # Ajusta o scaler global
+    GLOBAL_SCALER = StandardScaler()
+    GLOBAL_SCALER.fit(vetores_para_fit)
+
+    # Se quiser usar PCA, inicialize e ajuste aqui também (opcional)
+    # Exemplo para 95% de variância explicada:
+    # GLOBAL_PCA = PCA(n_components=0.95)
+    # GLOBAL_PCA.fit(GLOBAL_SCALER.transform(vetores_para_fit))
+
+    # Usa o primeiro vetor como base só para aplicar_transformacoes
     vetor_base = todas_musicas_validas[0][1]
     _, _ = aplicar_transformacoes(vetores_para_fit, vetor_base)
 
+
     # Gera recomendações para cada música e salva o gráfico
-    pasta_plot = os.path.join(pasta, "recomendacoes_img")
     os.makedirs(pasta_plot, exist_ok=True)
 
     for nome_musica, vetor in zip(nomes_validos, vetores_para_fit):
@@ -553,6 +564,7 @@ def processar_pasta(pasta, saida_spectrogramas, pasta_recomendacoes):
             plot_recomendacoes(nome_musica, vetor, caminho_plot)
         else:
             print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
+
 
 def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
     """
