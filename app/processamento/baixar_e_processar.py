@@ -43,6 +43,17 @@ def baixar_musicas(lista_de_links, pasta_download):
             except Exception as e:
                 print(f"❌ Erro ao baixar {link}: {e}")
 
+def limpar_arquivo(caminho_arquivo_links):
+    """
+    Limpa o conteúdo de um arquivo, apagando todos os links.
+    """
+    try:
+        with open(caminho_arquivo_links, "w") as f:
+            f.write("")
+    except Exception as e:
+        print(f"❌ Erro ao limpar o arquivo links: {e}")
+
+
 if __name__ == "__main__":
     pasta_download = "/home/jovyan/work/audio"
     caminho_arquivo_links = "/home/jovyan/work/cache/links_youtube/links.txt"
@@ -50,3 +61,4 @@ if __name__ == "__main__":
     lista_links = ler_links_de_arquivo(caminho_arquivo_links)
     if lista_links:
         baixar_musicas(lista_links, pasta_download)
+        limpar_arquivo(caminho_arquivo_links)
