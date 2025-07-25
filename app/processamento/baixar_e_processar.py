@@ -1,12 +1,12 @@
 from yt_dlp import YoutubeDL
 import os
 
-def baixar_musicas(lista_de_links, destino='./audio'):
-    os.makedirs(destino, exist_ok=True)
+def baixar_musicas(lista_de_links, pasta_download):
+    os.makedirs(pasta_download, exist_ok=True)
 
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': f'{destino}/%(title)s.%(ext)s',
+        'outtmpl': f'{pasta_download}/%(title)s.%(ext)s',
         'quiet': False,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
@@ -26,5 +26,4 @@ def baixar_musicas(lista_de_links, destino='./audio'):
 if __name__ == "__main__":
     pasta_download = "/home/jovyan/work/audio"
     lista_links = "/home/jovyan/work/cache/links_youtube"
-
     baixar_musicas(lista_links, pasta_download)
