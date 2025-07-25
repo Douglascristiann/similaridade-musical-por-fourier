@@ -11,5 +11,6 @@ COPY ./app /home/jovyan/work/
 
 # Corrige permissões para que jovyan possa escrever
 USER root
+RUN apt update && apt install -y ffmpeg
 RUN chown -R jovyan:users /home/jovyan
 USER jovyan
