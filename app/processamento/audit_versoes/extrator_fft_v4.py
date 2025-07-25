@@ -612,12 +612,14 @@ def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
 
 if __name__ == "__main__":
     pasta_audio = "/home/jovyan/work/audio"
-    pasta_spectrogramas = "/home/jovyan/work/spectrogramas"
-    pasta_recomendacoes = "/home/jovyan/work/spectrogramas/recomendacoes_img"
+    pasta_spectrogramas = "/home/jovyan/work/cache/spectrogramas"
+    pasta_recomendacoes = "/home/jovyan/work/cache/spectrogramas/recomendacoes_img"
+    pasta_linksytube = "/home/jovyan/work/cache/links_youtube"
 
     # Garante que as pastas existam
     os.makedirs(pasta_spectrogramas, exist_ok=True)
     os.makedirs(pasta_recomendacoes, exist_ok=True)
+    os.makedirs(pasta_linksytube, exist_ok=True)
 
     if not os.path.exists(pasta_audio):
         print(f"❌ Pasta de áudio não encontrada: {pasta_audio}")
