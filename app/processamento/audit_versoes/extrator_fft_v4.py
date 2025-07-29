@@ -34,7 +34,7 @@ AUDD_TOKEN = "194e979e8e5d531ffd6d54941f5b7977"
 EXPECTED_FEATURE_LENGTH = 40 * 3 + 12 + 6 + 6 + 1 + 1 + 1 + 1 + 1  # = 161
 
 # Nome da tabela do banco de dados a ser usada
-DB_TABLE_NAME = "tb_musicas_v3" # Usaremos a nova tabela v2
+DB_TABLE_NAME = "tb_musicas_v2" # Usaremos a nova tabela v2
 
 # =================== BANCO DE DADOS ===================
 def conectar():
