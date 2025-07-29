@@ -1,18 +1,17 @@
 # =================== IMPORTS ===================
 import os
-import asyncio
-import requests
+
 import numpy as np
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
-import soundfile as sf
+
 from librosa.feature.rhythm import tempo
-from tinytag import TinyTag
+
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from shazamio import Shazam
+
 from yt_dlp import YoutubeDL
 import mysql.connector
 import warnings
