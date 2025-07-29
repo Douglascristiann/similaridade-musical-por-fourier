@@ -7,3 +7,4 @@ scikit-learn
 requests
 tinytag
 mysql-connector-python
+yt_dlp
