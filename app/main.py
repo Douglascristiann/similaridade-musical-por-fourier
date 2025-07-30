@@ -1,24 +1,47 @@
-#!/usr/bin/env python3
-import sys
 import os
+import sys
+
+# Adiciona o diretório 'processamento' ao path
+sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "API"))
+
+from extrator_fft import processar_audio_local, processar_audio_youtube
+
+def menu():
+    print("\n=== Menu de Processamento de Áudio ===")
+    print("1. Inserir arquivo de áudio local")
+    print("2. Inserir link do YouTube")
+    print("0. Sair")
+    return input("Escolha uma opção: ").strip()
 
 def main():
-    # Caminho absoluto para o diretório 'teste_unitarios'
-    teste_unitarios_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'teste_unitarios'))
-    
-    # Adiciona ao sys.path se ainda não estiver presente
-    if teste_unitarios_path not in sys.path:
-        sys.path.append(teste_unitarios_path)
+    while True:
+        opcao = menu()
 
-    try:
-        # Importa a função do arquivo preprocess_return.py
-        from preprocess_return import executar_testes
+        if opcao == "1":
+            caminho = input("Digite o caminho do arquivo de áudio: ").strip()
+            if os.path.isfile(caminho):
+                try:
+                    processar_audio_local(caminho)
+                    print("✅ Arquivo processado com sucesso!")
+                except Exception as e:
+                    print(f"❌ Erro ao processar o áudio: {e}")
+            else:
+                print("❌ Caminho inválido ou arquivo inexistente.")
 
-        executar_testes()
-    except ModuleNotFoundError as e:
-        print(f"❌ Erro ao importar o módulo 'preprocess_return': {e}")
-        sys.exit(1)
-        
+        elif opcao == "2":
+            link = input("Digite o link do YouTube: ").strip()
+            try:
+                processar_audio_youtube(link)
+                print("✅ Link processado com sucesso!")
+            except Exception as e:
+                print(f"❌ Erro ao processar o link: {e}")
+
+        elif opcao == "0":
+            print("Encerrando...")
+            break
+        else:
+            print("❌ Opção inválida. Tente novamente.")
 
 if __name__ == "__main__":
     main()

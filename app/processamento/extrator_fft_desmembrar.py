@@ -208,18 +208,7 @@ def reconhecer_metadado(path):
         return ("Não Encontrado",) * 5
 
 # =================== RECONHECIMENTO UNIFICADO ===================
-async def reconhecer_musica(path):
-    """Tenta reconhecer uma música usando Shazam, AudD ou metadados, nesta ordem."""
-    resultado = await reconhecer_shazam_trechos(path)
-    if resultado:
-        return resultado
 
-    print("⚠️ Shazam não encontrou. Tentando outras APIs.")
-    resultado = reconhecer_audd(path)
-    if any(r != "Não Encontrado" for r in resultado): # Se AudD encontrou algo (não tudo "Não Encontrado")
-        return resultado
-
-    return reconhecer_metadado(path) # Última tentativa com metadados locais
 
 # =================== BUSCA YOUTUBE ===================
 def buscar_youtube_link(artista, titulo):

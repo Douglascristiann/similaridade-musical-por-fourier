@@ -62,12 +62,12 @@ def criar_tabela():
             conn.commit()
             print(f"✅ Tabela '{DB_TABLE_NAME}' verificada/criada com sucesso.")
 
-def musica_existe(titulo):
-    """Verifica se uma música já existe na tabela do banco de dados."""
+def musica_existe(nome):
     with conectar() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT 1 FROM {DB_TABLE_NAME} WHERE nome = %s", (titulo,))
-            return cur.fetchone() is not titulo
+            cur.execute(f"SELECT 1 FROM {DB_TABLE_NAME} WHERE nome = %s", (nome,))
+            return cur.fetchone() is not None
+
 
 def inserir_musica(nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube):
     """Insere as informações de uma música e suas características no banco de dados."""
@@ -75,7 +75,7 @@ def inserir_musica(nome, caracteristicas, artista, titulo, album, genero, capa_a
         print(f"❌ Erro: Características da música '{nome}' têm tamanho incorreto ({len(caracteristicas)}). Esperado: {EXPECTED_FEATURE_LENGTH}. Não será inserida na '{DB_TABLE_NAME}'.")
         return
 
-    if musica_existe(titulo):
+    if musica_existe(nome):
         print(f"⚠️ Música '{titulo}' já cadastrada em '{DB_TABLE_NAME}'.\n🔗 Link: '{link_youtube}'")
         return
 
@@ -497,20 +497,15 @@ def recomendar_knn(nome_base, vetor_base):
 
 # =================== EXECUÇÃO ===================
 def processar_pasta(pasta, saida_spectrogramas, pasta_plot):
-    """
-    Processa todos os arquivos de áudio em uma pasta:
-    - extrai características,
-    - reconhece metadados,
-    - salva no banco,
-    - gera espectrogramas,
-    - executa recomendações com gráfico.
-    """
     criar_tabela()
 
-    if not os.path.exists(saida_spectrogramas):
-        os.makedirs(saida_spectrogramas)
+    os.makedirs(saida_spectrogramas, exist_ok=True)
+    os.makedirs(pasta_plot, exist_ok=True)
+
+    global GLOBAL_SCALER, GLOBAL_PCA
 
     print("\n🔍 Iniciando extração de características...")
+
     for arquivo in os.listdir(pasta):
         if arquivo.lower().endswith((".mp3", ".wav")):
             caminho = os.path.join(pasta, arquivo)
@@ -520,50 +515,39 @@ def processar_pasta(pasta, saida_spectrogramas, pasta_plot):
             link_youtube = buscar_youtube_link(artista, titulo)
             caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, saida_spectrogramas, artista, titulo)
 
-            if len(caracs) == EXPECTED_FEATURE_LENGTH:
-                inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)
-            else:
+            if len(caracs) != EXPECTED_FEATURE_LENGTH:
                 print(f"❌ Vetor inconsistente para '{arquivo}' ({len(caracs)}), pulando.")
+                continue
 
-    print("\n✅ Extração finalizada. Preparando recomendações...")
+            # Insere no banco
+            inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)
 
-    todas_musicas_validas = carregar_musicas()
-    if len(todas_musicas_validas) < 2:
-        print("⚠️ Não há músicas suficientes para recomendar.")
-        return
+            # Carrega músicas já inseridas (inclusive esta)
+            todas_musicas_validas = carregar_musicas()
 
-    vetores_para_fit = np.array([m[1] for m in todas_musicas_validas], dtype=np.float64)
-    nomes_validos = [m[0] for m in todas_musicas_validas]
+            if len(todas_musicas_validas) < 2:
+                print("⚠️ Não há músicas suficientes para recomendar.")
+                continue
 
-    global GLOBAL_SCALER, GLOBAL_PCA
+            # Ajusta o scaler global
+            vetores_para_fit = np.array([m[1] for m in todas_musicas_validas], dtype=np.float64)
+            GLOBAL_SCALER = StandardScaler().fit(vetores_para_fit)
 
-    # Ajusta o scaler global
-    GLOBAL_SCALER = StandardScaler()
-    GLOBAL_SCALER.fit(vetores_para_fit)
+            # PCA é opcional
+            # GLOBAL_PCA = PCA(n_components=0.95)
+            # GLOBAL_PCA.fit(GLOBAL_SCALER.transform(vetores_para_fit))
 
-    # Se quiser usar PCA, inicialize e ajuste aqui também (opcional)
-    # Exemplo para 95% de variância explicada:
-    # GLOBAL_PCA = PCA(n_components=0.95)
-    # GLOBAL_PCA.fit(GLOBAL_SCALER.transform(vetores_para_fit))
+            # Gera recomendação apenas para a música atual
+            nome_musica_base = arquivo
+            vetor_musica_base = caracs
 
-    # Usa o primeiro vetor como base só para aplicar_transformacoes
-    vetor_base = todas_musicas_validas[0][1]
-    _, _ = aplicar_transformacoes(vetores_para_fit, vetor_base)
+            print(f"\n✨ Gerando recomendações para: {nome_musica_base}")
+            recomendar_knn(nome_musica_base, vetor_musica_base)
 
+            # Gera gráfico de recomendação
+            caminho_plot = os.path.join(pasta_plot, f"{os.path.splitext(nome_musica_base)[0]}_recomendacoes.png")
+            plot_recomendacoes(nome_musica_base, vetor_musica_base, caminho_plot)
 
-    # Gera recomendações para cada música e salva o gráfico
-    os.makedirs(pasta_plot, exist_ok=True)
-
-    for nome_musica, vetor in zip(nomes_validos, vetores_para_fit):
-        if len(vetor) == EXPECTED_FEATURE_LENGTH:
-            print(f"\n✨ Gerando recomendações para: {nome_musica}")
-            recomendar_knn(nome_musica, vetor)
-
-            # Gera e salva gráfico de recomendações
-            caminho_plot = os.path.join(pasta_plot, f"{os.path.splitext(nome_musica)[0]}_recomendacoes.png")
-            plot_recomendacoes(nome_musica, vetor, caminho_plot)
-        else:
-            print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
 
 
 def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
