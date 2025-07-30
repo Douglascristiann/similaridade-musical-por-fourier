@@ -1,6 +1,16 @@
 import os
 from yt_dlp import YoutubeDL
 
+
+def insetir_links(entrada_links):
+    try:
+        with open(caminho_arquivo_links, "w") as f:
+            f.write(entrada_links)
+    except Exception as e:
+        print(f"❌ Erro ao inserir links {e}")
+
+
+
 def ler_links_de_arquivo(caminho_arquivo):
     """
     Lê um arquivo .txt contendo links (um por linha) e retorna uma lista com URLs válidas.
@@ -34,15 +44,16 @@ def baixar_musicas(lista_de_links, pasta_download):
             'preferredquality': '192',
         }],
     }
-
+    total_baixadas = 0
     with YoutubeDL(ydl_opts) as ydl:
         for link in lista_de_links:
             try:
                 print(f"⬇️ Baixando: {link}")
                 ydl.download([link])
+                total_baixadas += 1
             except Exception as e:
                 print(f"❌ Erro ao baixar {link}: {e}")
-
+    return total_baixadas
 def limpar_arquivo(caminho_arquivo_links):
     """
     Limpa o conteúdo de um arquivo, apagando todos os links.
@@ -55,10 +66,11 @@ def limpar_arquivo(caminho_arquivo_links):
 
 
 if __name__ == "__main__":
-    pasta_download = "/home/jovyan/work/audio"
+    pasta_audio = "/home/jovyan/work/audio"
     caminho_arquivo_links = "/home/jovyan/work/cache/links_youtube/links.txt"
 
     lista_links = ler_links_de_arquivo(caminho_arquivo_links)
     if lista_links:
-        baixar_musicas(lista_links, pasta_download)
+
+        baixar_musicas(lista_links, pasta_audio)
         limpar_arquivo(caminho_arquivo_links)

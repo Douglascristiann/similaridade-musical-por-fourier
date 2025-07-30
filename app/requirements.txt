@@ -8,3 +8,4 @@ requests
 tinytag
 mysql-connector-python
 yt_dlp
+discogs_client
