@@ -1,14 +1,20 @@
 import os
 from yt_dlp import YoutubeDL
 
-def inserir_links(entrada_links, caminho_arquivo_links):
+
+def insetir_links(entrada_links):
     try:
         with open(caminho_arquivo_links, "w") as f:
             f.write(entrada_links)
     except Exception as e:
         print(f"❌ Erro ao inserir links {e}")
 
+
+
 def ler_links_de_arquivo(caminho_arquivo):
+    """
+    Lê um arquivo .txt contendo links (um por linha) e retorna uma lista com URLs válidas.
+    """
     links = []
     try:
         with open(caminho_arquivo, "r") as f:
@@ -23,6 +29,9 @@ def ler_links_de_arquivo(caminho_arquivo):
     return links
 
 def baixar_musicas(lista_de_links, pasta_download):
+    """
+    Baixa os links fornecidos como arquivos .mp3 na pasta especificada.
+    """
     os.makedirs(pasta_download, exist_ok=True)
 
     ydl_opts = {
@@ -45,10 +54,23 @@ def baixar_musicas(lista_de_links, pasta_download):
             except Exception as e:
                 print(f"❌ Erro ao baixar {link}: {e}")
     return total_baixadas
-
 def limpar_arquivo(caminho_arquivo_links):
+    """
+    Limpa o conteúdo de um arquivo, apagando todos os links.
+    """
     try:
         with open(caminho_arquivo_links, "w") as f:
             f.write("")
     except Exception as e:
         print(f"❌ Erro ao limpar o arquivo links: {e}")
+
+
+if __name__ == "__main__":
+    pasta_audio = "/home/jovyan/work/audio"
+    caminho_arquivo_links = "/home/jovyan/work/cache/links_youtube/links.txt"
+
+    lista_links = ler_links_de_arquivo(caminho_arquivo_links)
+    if lista_links:
+
+        baixar_musicas(lista_links, pasta_audio)
+        limpar_arquivo(caminho_arquivo_links)

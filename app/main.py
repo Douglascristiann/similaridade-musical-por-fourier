@@ -1,12 +1,18 @@
+# main.py
+
 import os
 import sys
 
-# Adiciona o diretório 'processamento' ao path
-sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
+# Adiciona os diretórios da API e do processamento ao path
 sys.path.append(os.path.join(os.path.dirname(__file__), "API"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
 
+from processar_links import processar_link
 from extrator_fft import processar_audio_local, processar_audio_youtube
-from dowloadmusicyl import insetir_links, ler_links_de_arquivobaixar_musicas, baixar_musicas, limpar_arquivo
+
+# Caminhos fixos usados nos scripts
+pasta_audio = "/home/jovyan/work/audio"
+caminho_arquivo_links = "/home/jovyan/work/cache/links_youtube/links.txt"
 
 def menu():
     print("\n=== Menu de Processamento de Áudio ===")
@@ -32,18 +38,8 @@ def main():
 
         elif opcao == "2":
             link = input("Digite o link do YouTube: ").strip()
-            try:
-                insetir_links(link)
-                if lista_de_links:
-                    lista_de_links = ler_links_de_arquivobaixar_musicas(caminho_arquivo_links)
-                    total = baixar_musicas(lista_de_links, pasta_audio)
-                    limpar_arquivo(caminho_arquivo_links)
-                    print(f"⬇️ Total de  músicas baixadas:{total}")
-                else:
-                    print("❌ Erro ou informar o/s link") 
-            except Exception as e:
-                print(f"❌ Erro ao processar o link: {e}")
-
+            r = processar_link(link, caminho_arquivo_links, pasta_audio)
+            print(f"{r}")
         elif opcao == "0":
             print("Encerrando...")
             break
@@ -51,7 +47,4 @@ def main():
             print("❌ Opção inválida. Tente novamente.")
 
 if __name__ == "__main__":
-    pasta_audio = "/home/jovyan/work/audio"
-    caminho_arquivo_links = "/home/jovyan/work/cache/links_youtube/links.txt"
-
     main()

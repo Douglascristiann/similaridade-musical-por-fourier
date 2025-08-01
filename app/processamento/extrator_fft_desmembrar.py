@@ -1,6 +1,5 @@
 # =================== IMPORTS ===================
 import os
-
 import numpy as np
 import librosa
 import librosa.display
@@ -40,26 +39,7 @@ def conectar():
     """Estabelece uma conexão com o banco de dados MySQL."""
     return mysql.connector.connect(**DB_CONFIG)
 
-def criar_tabela():
-    """Cria a tabela de músicas no banco de dados, se ela não existir."""
-    with conectar() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {DB_TABLE_NAME} (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    nome VARCHAR(255) NOT NULL,
-                    caracteristicas TEXT NOT NULL,
-                    artista VARCHAR(255),
-                    titulo VARCHAR(255),
-                    album VARCHAR(255),
-                    genero VARCHAR(255),
-                    capa_album TEXT,
-                    link_youtube TEXT,
-                    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            conn.commit()
-            print(f"✅ Tabela '{DB_TABLE_NAME}' verificada/criada com sucesso.")
+
 
 def musica_existe(titulo):
     """Verifica se uma música já existe na tabela do banco de dados."""
