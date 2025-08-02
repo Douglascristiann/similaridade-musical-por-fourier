@@ -4,7 +4,26 @@ import os
 from yt_dlp import YoutubeDL
 
 def buscar_youtube_link(artista, titulo):
-    # ... (o código desta função permanece o mesmo) ...
+    """Busca um link do YouTube para uma música."""
+    if artista == "Não Encontrado" or titulo == "Não Encontrado":
+        return "Não Encontrado"
+
+    query = f"{artista} {titulo}"
+    ydl_opts = {
+        'quiet': True, # Suprime a saída do yt-dlp
+        'skip_download': True, # Não baixa o vídeo
+        'extract_flat': True, # Extrai apenas informações básicas rapidamente
+    }
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            result = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            if 'entries' in result and result['entries']:
+                video_id = result['entries'][0].get('id')
+                if video_id:
+                    return f"https://www.youtube.com/watch?v={video_id}"
+    except Exception as e:
+        print("❌ Erro yt_dlp:", e)
+    return "Não Encontrado"
 
 def processar_link(link, caminho_arquivo_links, pasta_audio):
     if not link:
