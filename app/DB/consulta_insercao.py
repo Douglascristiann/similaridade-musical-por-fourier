@@ -4,12 +4,43 @@ import mysql.connector
 DB_TABLE_NAME = "tb_musicas_v3" # Usaremos a nova tabela v2
 EXPECTED_FEATURE_LENGTH = 40 * 3 + 12 + 6 + 6 + 1 + 1 + 1 + 1 + 1  # = 161
 
-def musica_existe(titulo):
-    """Verifica se uma música já existe na tabela do banco de dados."""
+from db_connect import DB_CONFIG
+
+def conectar():
+    """Estabelece uma conexão com o banco de dados MySQL."""
+    return mysql.connector.connect(**DB_CONFIG)
+
+# def musica_existe(titulo):
+#     """Verifica se uma música já existe na tabela do banco de dados."""
+#     with conectar() as conn:
+#         with conn.cursor() as cur:
+#             cur.execute(f"SELECT 1 FROM {DB_TABLE_NAME} WHERE nome = %s", (titulo,))
+#             return cur.fetchone() is not titulo
+def musicas_nao_existentes(titulos_artistas):
+    """
+    Retorna apenas os (titulo, artista) que NÃO existem na tabela do banco de dados.
+    titulos_artistas: lista de tuplas (titulo, artista)
+    """
+    if not titulos_artistas:
+        return []
+
+    placeholders = ','.join(['(%s, %s)'] * len(titulos_artistas))
+    params = [item for tupla in titulos_artistas for item in tupla]
+
+    query = (
+        f"SELECT titulo, artista FROM {DB_TABLE_NAME} "
+        f"WHERE (titulo, artista) IN ({placeholders})"
+    )
+
+    existentes = set()
     with conectar() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT 1 FROM {DB_TABLE_NAME} WHERE nome = %s", (titulo,))
-            return cur.fetchone() is not titulo
+            cur.execute(query, params)
+            for titulo, artista in cur.fetchall():
+                existentes.add((titulo, artista))
+
+    return [tupla for tupla in titulos_artistas if tupla not in existentes]
+
 
 def inserir_musica(nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube):
     """Insere as informações de uma música e suas características no banco de dados."""

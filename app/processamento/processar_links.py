@@ -7,12 +7,14 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "API")))
 
 from dowloadmusicyl import (
+    reconhecer_titulo,
     inserir_links,
     ler_links_de_arquivo,
     baixar_musicas,
     limpar_arquivo
 )
 from db_connect import verificar_conexao_e_criar_tabela
+from consulta_insercao import musica_existe
 
 def processar_link(link: str, caminho_arquivo_links: str, pasta_audio: str):
 
@@ -21,7 +23,10 @@ def processar_link(link: str, caminho_arquivo_links: str, pasta_audio: str):
 
         inserir_links(link, caminho_arquivo_links)
         lista_de_links = ler_links_de_arquivo(caminho_arquivo_links)
-        
+        r = reconhecer_titulo(lista_de_links)
+
+        lista_de_links = musica_existe(r)
+
         if lista_de_links:
             total = baixar_musicas(lista_de_links, pasta_audio)
             limpar_arquivo(caminho_arquivo_links)
