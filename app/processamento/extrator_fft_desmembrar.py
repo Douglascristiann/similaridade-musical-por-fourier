@@ -4,166 +4,16 @@ import numpy as np
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
-
 from librosa.feature.rhythm import tempo
-
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-
-from yt_dlp import YoutubeDL
-import mysql.connector
 import warnings
+from config import EXPECTED_FEATURE_LENGTH, PASTA_SPECTROGRAMAS
+from spectrograma_caracteristicas import gerar_spectrograma
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # =================== CONFIGURAÇÃO ===================
-DB_CONFIG = {
-    "user": "root",
-    "password": "managerffti8p68",
-    "host": "db",
-    "port": 3306,
-    "database": "dbmusicadata"
-}
-
-AUDD_TOKEN = "194e979e8e5d531ffd6d54941f5b7977"
-
-# Define o número esperado de características após a extração
-# n_mfcc (40) * 3 (mfcc, delta, delta2) + chroma (12) + tonnetz (6) + contrast (7) + tempo (1)
-EXPECTED_FEATURE_LENGTH = 40 * 3 + 12 + 6 + 6 + 1 + 1 + 1 + 1 + 1  # = 161
-
-# Nome da tabela do banco de dados a ser usada
-DB_TABLE_NAME = "tb_musicas_v3" # Usaremos a nova tabela v2
-
-# =================== BANCO DE DADOS ===================
-
-
-
-
-
-# =================== PRÉ-PROCESSAMENTO SHAZAM ===================
-def preparar_trecho_para_shazam(y, sr):
-    """Prepara um trecho de áudio para reconhecimento pelo Shazam."""
-    y_norm = librosa.util.normalize(y)
-    y_trim, _ = librosa.effects.trim(y_norm, top_db=20)
-    if sr != 44100:
-        y_trim = librosa.resample(y_trim, orig_sr=sr, target_sr=44100)
-        sr = 44100
-    return y_trim, sr
-
-async def tentar_reconhecer(shazam, arquivo, tentativas=3):
-    """Tenta reconhecer um arquivo de áudio usando a API do Shazam, com retentativas."""
-    for tentativa in range(tentativas):
-        try:
-            result = await shazam.recognize(arquivo)
-            return result
-        except Exception as e:
-            print(f"❌ Erro ShazamIO na tentativa {tentativa+1}: {e}")
-            await asyncio.sleep(1) # Pequena pausa antes de retentar
-    return None
-
-async def reconhecer_shazam_trechos(path):
-    """Tenta reconhecer uma música usando o Shazam, analisando múltiplos trechos."""
-    y, sr = librosa.load(path, sr=None)
-    duracao_total = librosa.get_duration(path=path)
-    shazam = Shazam()
-
-    trecho_duracao = 15 # Duração de cada trecho a ser analisado
-    passo = 10 # Pula 10 segundos para o próximo trecho
-    num_trechos = max(1, int((duracao_total - trecho_duracao) / passo) + 1)
-    print(f"🔎 Analisando {num_trechos} trechos para Shazam...")
-
-    for i in range(num_trechos):
-        start = i * passo
-        end = min(start + trecho_duracao, duracao_total)
-        if start >= end:
-            break
-
-        trecho = y[int(start * sr):int(end * sr)]
-        trecho_preparado, sr_preparado = preparar_trecho_para_shazam(trecho, sr)
-
-        tmp = f"/tmp/shazam_trecho_{i}.wav"
-        sf.write(tmp, trecho_preparado, sr_preparado, subtype='PCM_16')
-
-        result = await tentar_reconhecer(shazam, tmp)
-        if result and result.get("track"):
-            track = result["track"]
-            artista = track.get("subtitle", "Não Encontrado")
-            titulo = track.get("title", "Não Encontrado")
-
-            album = "Não Encontrado"
-            sections = track.get("sections", [])
-            if sections and isinstance(sections, list):
-                metadata = sections[0].get("metadata", [])
-                if metadata and isinstance(metadata, list):
-                    album = metadata[0].get("text", "Não Encontrado")
-
-            genero = track.get("genres", {}).get("primary", "Não Encontrado")
-            capa_url = track.get("images", {}).get("coverart", "Não Encontrado")
-            print(f"✅ Shazam reconheceu: {artista} - {titulo}")
-            return artista, titulo, album, genero, capa_url
-
-    return None
-
-# =================== OUTRAS APIS ===================
-def reconhecer_audd(path):
-    """Tenta reconhecer uma música usando a API do AudD."""
-    try:
-        with open(path, 'rb') as f:
-            files = {'file': f}
-            data = {'api_token': AUDD_TOKEN, 'return': 'apple_music,spotify'}
-            r = requests.post('https://api.audd.io/', data=data, files=files, timeout=10).json()
-            result = r.get("result")
-            if result:
-                return (
-                    result.get("artist", "Não Encontrado"),
-                    result.get("title", "Não Encontrado"),
-                    result.get("album", "Não Encontrado"),
-                    result.get("genre", "Não Encontrado"),
-                    "Não Encontrado" # AudD não retorna capa_album diretamente
-                )
-    except Exception as e:
-        print("\u274c Erro AudD:", e)
-    return ("Não Encontrado",) * 5
-
-def reconhecer_metadado(path):
-    """Tenta reconhecer uma música lendo seus metadados (tags ID3)."""
-    try:
-        tag = TinyTag.get(path)
-        return (
-            tag.artist or "Não Encontrado",
-            tag.title or "Não Encontrado",
-            tag.album or "Não Encontrado",
-            tag.genre or "Não Encontrado",
-            "Não Encontrado" # TinyTag não retorna capa_album URL
-        )
-    except:
-        return ("Não Encontrado",) * 5
-
-# =================== RECONHECIMENTO UNIFICADO ===================
-
-
-# =================== BUSCA YOUTUBE ===================
-def buscar_youtube_link(artista, titulo):
-    """Busca um link do YouTube para uma música."""
-    if artista == "Não Encontrado" or titulo == "Não Encontrado":
-        return "Não Encontrado"
-
-    query = f"{artista} {titulo}"
-    ydl_opts = {
-        'quiet': True, # Suprime a saída do yt-dlp
-        'skip_download': True, # Não baixa o vídeo
-        'extract_flat': True, # Extrai apenas informações básicas rapidamente
-    }
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            result = ydl.extract_info(f"ytsearch1:{query}", download=False)
-            if 'entries' in result and result['entries']:
-                video_id = result['entries'][0].get('id')
-                if video_id:
-                    return f"https://www.youtube.com/watch?v={video_id}" # Formato do seu link exemplo
-    except Exception as e:
-        print("\u274c Erro yt_dlp:", e)
-    return "Não Encontrado"
 
 # =================== EXTRAÇÃO DE FEATURES ===================
 def preprocess_audio(path, sr=22050):
@@ -255,59 +105,16 @@ def extrair_features_completas(y, sr):
         print(f"❌ Erro ao extrair features completas: {e}")
         return np.zeros(EXPECTED_FEATURE_LENGTH)
 
-def gerar_spectrograma(y, sr, path_out, artista=None, titulo=None, modo='stft'):
-    """
-    Gera e salva um espectrograma logarítmico para o áudio.
-    modo = 'stft' ou 'mel'
-    """
-    if y is None or sr is None:
-        print(f"❌ Não foi possível gerar espectrograma para {path_out}, áudio inválido.")
-        return
 
-    # Garante que a pasta exista
-    os.makedirs(os.path.dirname(path_out), exist_ok=True)
-
-    plt.figure(figsize=(10, 4))
-
-    if modo == 'mel':
-        S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
-        S_db = librosa.power_to_db(S, ref=np.max)
-        librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel', cmap='magma')
-    else:
-        S = librosa.stft(y)
-        S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
-        librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='log', cmap='magma')
-
-    plt.colorbar(format='%+2.0f dB')
-    plt.title(f"{titulo or 'Sem Título'} — {artista or 'Desconhecido'}", fontsize=12)
-    plt.tight_layout()
-    plt.savefig(path_out, dpi=120)
-    plt.close()
-
-# def extrair_caracteristicas_e_spectrograma(path, output_folder, artista, titulo):
-#     """Combina o pré-processamento, extração de features e geração de espectrograma."""
-#     y, sr = preprocess_audio(path)
-#     if y is None:
-#         return np.zeros(EXPECTED_FEATURE_LENGTH) # Retorna zeros se pré-processamento falhou
-
-#     features = extrair_features_completas(y, sr)
-#     nome_arquivo = os.path.splitext(os.path.basename(path))[0]
-#     spectro_path = os.path.join(output_folder, f"{nome_arquivo}_spectrograma.png")
-#     gerar_spectrograma(y, sr, spectro_path, artista, titulo)
-#     print(f"📸 Espectrograma salvo em: {spectro_path}")
-#     return features
-def extrair_caracteristicas_e_spectrograma(path, output_folder, artista, titulo):
+def extrair_caracteristicas_e_spectrograma(path, artista, titulo):
     y, sr = preprocess_audio(path)
     if y is None:
         return np.zeros(EXPECTED_FEATURE_LENGTH), None
-
     features = extrair_features_completas(y, sr)
     nome_arquivo = os.path.splitext(os.path.basename(path))[0]
     spectro_path = os.path.join(output_folder, f"{nome_arquivo}_spectrograma.png")
     gerar_spectrograma(y, sr, spectro_path, artista, titulo)
-    print(f"📸 Espectrograma salvo em: {spectro_path}")
-    return features, spectro_path
-
+    return features
 # =================== RECOMENDAÇÃO ===================
 def calcular_similaridade(distancia, escala=0.95):
     """
@@ -416,7 +223,7 @@ def recomendar_knn(nome_base, vetor_base):
 
 
 # =================== EXECUÇÃO ===================
-def processar_pasta(pasta, saida_spectrogramas, pasta_plot):
+def processar_pasta(pasta, pasta_plot, metadados):
     """
     Processa todos os arquivos de áudio em uma pasta:
     - extrai características,
@@ -436,9 +243,9 @@ def processar_pasta(pasta, saida_spectrogramas, pasta_plot):
             caminho = os.path.join(pasta, arquivo)
             print(f"🎵 Processando: {arquivo}")
 
-            artista, titulo, album, genero, capa_album = asyncio.run(reconhecer_musica(caminho))
-            link_youtube = buscar_youtube_link(artista, titulo)
-            caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, saida_spectrogramas, artista, titulo)
+            #artista, titulo, album, genero, capa_album = asyncio.run(reconhecer_musica(caminho))
+            #link_youtube = buscar_youtube_link(artista, titulo)
+            caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo)
 
             if len(caracs) == EXPECTED_FEATURE_LENGTH:
                 inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)

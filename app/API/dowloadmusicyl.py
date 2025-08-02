@@ -10,6 +10,7 @@ def reconhecer_titulo(links):
         'quiet': True,
         'skip_download': True,
         'extract_flat': True,
+        'cookiefile': '/home/jovyan/work/cache/cookies/cookies.txt',
     }
     with YoutubeDL(ydl_opts) as ydl:
         for link in links:
@@ -52,10 +53,12 @@ def baixar_musicas(lista_de_links, pasta_download):
         'format': 'bestaudio/best',
         'outtmpl': f'{pasta_download}/%(title)s.%(ext)s',
         'quiet': False,
+        'cookiefile': '/home/jovyan/work/cache/cookies/cookies.txt',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
+            
         }],
     }
     total_baixadas = 0

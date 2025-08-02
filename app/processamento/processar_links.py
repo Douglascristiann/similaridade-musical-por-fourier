@@ -32,12 +32,18 @@ def processar_link(link: str, caminho_arquivo_links: str, pasta_audio: str):
             return 0
         if links_novos:
             total = baixar_musicas(links_novos, pasta_audio)
+            metadados = reconhecer_titulo(links_novos)
+            for i in range(len(metadados)):
+                metadados[i]['link_youtube'] = links_novos[i]
+
             limpar_arquivo(caminho_arquivo_links)
             print(f"⬇️ Total de músicas baixadas: {total}")
-            return total
+            return metadados 
         else:
             print("❌ Nenhum link encontrado ou link inválido.")
             return 0
     except Exception as e:
     #     print(f"❌ Erro ao processar o link: {e}")
-        return -1
+         return -1
+
+
