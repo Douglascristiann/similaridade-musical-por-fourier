@@ -10,7 +10,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "database"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "recomendacao"))
 
 from processar_links import processar_link
-from extrator_fft import processar_audio_local, processar_audio_youtube
+from extrator_fft import processar_audio_local
 from recomendar import preparar_modelos_recomendacao
 from database.db import criar_tabela
 
@@ -22,20 +22,17 @@ def menu():
     print("\n=== Menu de Processamento de Áudio ===")
     print("1. Inserir arquivo de áudio local")
     print("2. Inserir link do YouTube")
-    print("3. Gerar recomendações para todas as músicas (precisa ter 2 ou mais no DB)")
+    print("3. Gerar recomendações para todas as músicas")
     print("0. Sair")
     return input("Escolha uma opção: ").strip()
 
 def main():
-    # Garante que as pastas existam
     os.makedirs(pasta_audio, exist_ok=True)
     os.makedirs(os.path.dirname(caminho_arquivo_links), exist_ok=True)
-
-    # Cria a tabela no banco de dados se não existir
-    criar_tabela()
+    os.makedirs("/home/jovyan/work/cache/spectrogramas", exist_ok=True)
+    os.makedirs("/home/jovyan/work/cache/recomendacoes_img", exist_ok=True)
     
-    # Prepara os modelos de recomendação no início
-    print("Preparando modelos de recomendação...")
+    criar_tabela()
     preparar_modelos_recomendacao()
 
     while True:
@@ -54,9 +51,15 @@ def main():
 
         elif opcao == "2":
             link = input("Digite o link do YouTube: ").strip()
-            r = processar_link(link, caminho_arquivo_links, pasta_audio)
-            print(f"{r}")
-            
+            caminho_arquivo, mensagem = processar_link(link, caminho_arquivo_links, pasta_audio)
+            print(mensagem)
+            if caminho_arquivo:
+                try:
+                    processar_audio_local(caminho_arquivo)
+                    print("✅ Áudio do YouTube processado com sucesso!")
+                except Exception as e:
+                    print(f"❌ Erro ao processar o áudio baixado: {e}")
+        
         elif opcao == "3":
             try:
                 preparar_modelos_recomendacao(forcar_recalibragem=True)
