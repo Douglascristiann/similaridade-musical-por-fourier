@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "API"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
 
 from processar_links import processar_link
-from extrator_fft import processar_audio_local, processar_audio_youtube
+#from extrator_fft import processar_audio_local, processar_audio_youtube
 
 # Caminhos fixos usados nos scripts
 pasta_audio = "/home/jovyan/work/audio"
@@ -40,6 +40,7 @@ def main():
             link = input("Digite o link do YouTube: ").strip()
             r = processar_link(link, caminho_arquivo_links, pasta_audio)
             print(f"{r}")
+            
         elif opcao == "0":
             print("Encerrando...")
             break

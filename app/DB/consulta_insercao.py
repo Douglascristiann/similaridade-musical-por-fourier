@@ -16,30 +16,28 @@ def conectar():
 #         with conn.cursor() as cur:
 #             cur.execute(f"SELECT 1 FROM {DB_TABLE_NAME} WHERE nome = %s", (titulo,))
 #             return cur.fetchone() is not titulo
-def musicas_nao_existentes(titulos_artistas):
+def links_nao_existentes(lista_links):
     """
-    Retorna apenas os (titulo, artista) que NÃO existem na tabela do banco de dados.
-    titulos_artistas: lista de tuplas (titulo, artista)
+    Retorna apenas os links do YouTube que NÃO existem na tabela do banco de dados.
     """
-    if not titulos_artistas:
+    if not lista_links:
         return []
 
-    placeholders = ','.join(['(%s, %s)'] * len(titulos_artistas))
-    params = [item for tupla in titulos_artistas for item in tupla]
+    placeholders = ','.join(['%s'] * len(lista_links))
 
     query = (
-        f"SELECT titulo, artista FROM {DB_TABLE_NAME} "
-        f"WHERE (titulo, artista) IN ({placeholders})"
+        f"SELECT link_youtube FROM {DB_TABLE_NAME} "
+        f"WHERE link_youtube IN ({placeholders})"
     )
 
     existentes = set()
     with conectar() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, params)
-            for titulo, artista in cur.fetchall():
-                existentes.add((titulo, artista))
+            cur.execute(query, lista_links)
+            for (link,) in cur.fetchall():
+                existentes.add(link)
 
-    return [tupla for tupla in titulos_artistas if tupla not in existentes]
+    return [link for link in lista_links if link not in existentes]
 
 
 def inserir_musica(nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube):
@@ -48,7 +46,7 @@ def inserir_musica(nome, caracteristicas, artista, titulo, album, genero, capa_a
         print(f"❌ Erro: Características da música '{nome}' têm tamanho incorreto ({len(caracteristicas)}). Esperado: {EXPECTED_FEATURE_LENGTH}. Não será inserida na '{DB_TABLE_NAME}'.")
         return
 
-    if musica_existe(titulo):
+    if links_nao_existentes(link_youtube):
         print(f"⚠️ Música '{titulo}' já cadastrada em '{DB_TABLE_NAME}'.\n🔗 Link: '{link_youtube}'")
         return
 
