@@ -5,6 +5,7 @@ import os
 
 # Garante acesso ao módulo da API
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "API")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "DB")))
 
 from dowloadmusicyl import (
     reconhecer_titulo,
@@ -14,7 +15,7 @@ from dowloadmusicyl import (
     limpar_arquivo
 )
 from db_connect import verificar_conexao_e_criar_tabela
-from consulta_insercao import musica_existe
+from consulta_insercao import musicas_nao_existentes
 
 def processar_link(link: str, caminho_arquivo_links: str, pasta_audio: str):
 
@@ -25,7 +26,7 @@ def processar_link(link: str, caminho_arquivo_links: str, pasta_audio: str):
         lista_de_links = ler_links_de_arquivo(caminho_arquivo_links)
         r = reconhecer_titulo(lista_de_links)
 
-        lista_de_links = musica_existe(r)
+        lista_de_links = musicas_nao_existentes(r)
 
         if lista_de_links:
             total = baixar_musicas(lista_de_links, pasta_audio)
