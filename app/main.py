@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "API"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
 
 from processar_links import processar_link
-#from extrator_fft import processar_audio_local, processar_audio_youtube
+from extrator_fft import processar_audio_local, processar_pasta
 
 # Caminhos fixos usados nos scripts
 pasta_audio = "/home/jovyan/work/audio"
@@ -38,8 +38,14 @@ def main():
 
         elif opcao == "2":
             link = input("Digite o link do YouTube: ").strip()
-            r = processar_link(link, caminho_arquivo_links, pasta_audio)
-            print(f"{r}")
+            metadados = processar_link(link, caminho_arquivo_links, pasta_audio)
+
+            if metadados:
+                processar_pasta(pasta_audio, metadados)
+            elif metadados == {} or metadados == []:
+                print("Aqui será realizada a recomendação de músicas.")
+            else:
+                print("❌ Erro ao processar o link.")
             
         elif opcao == "0":
             print("Encerrando...")

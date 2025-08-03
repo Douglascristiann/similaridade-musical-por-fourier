@@ -1,5 +1,6 @@
 # =================== IMPORTS ===================
 import os
+import sys
 import numpy as np
 import librosa
 import librosa.display
@@ -13,7 +14,9 @@ from config import EXPECTED_FEATURE_LENGTH, PASTA_SPECTROGRAMAS
 from spectrograma_caracteristicas import gerar_spectrograma
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# =================== CONFIGURAÇÃO ===================
+sys.path.append(os.path.join(os.path.dirname(__file__), "DB"))
+
+from consulta_insercao import inserir_musica, carregar_musicas
 
 # =================== EXTRAÇÃO DE FEATURES ===================
 def preprocess_audio(path, sr=22050):
@@ -232,23 +235,35 @@ def processar_pasta(pasta, pasta_plot, metadados):
     - gera espectrogramas,
     - executa recomendações com gráfico.
     """
-    criar_tabela()
+    #criar_tabela()
 
-    if not os.path.exists(saida_spectrogramas):
-        os.makedirs(saida_spectrogramas)
+    # if not os.path.exists(saida_spectrogramas):
+    #     os.makedirs(saida_spectrogramas)
 
     print("\n🔍 Iniciando extração de características...")
+
     for arquivo in os.listdir(pasta):
         if arquivo.lower().endswith((".mp3", ".wav")):
             caminho = os.path.join(pasta, arquivo)
             print(f"🎵 Processando: {arquivo}")
 
-            #artista, titulo, album, genero, capa_album = asyncio.run(reconhecer_musica(caminho))
-            #link_youtube = buscar_youtube_link(artista, titulo)
+            meta = next((m for m in metadados if m.get("arquivo") == arquivo), None)
+            if not meta:
+                print(f"⚠️ Metadado não encontrado para '{arquivo}', pulando.")
+                continue
+
+            artista = meta.get("artista", "Desconhecido")
+            titulo = meta.get("titulo", "Desconhecido")
+            album = meta.get("album", "")
+            genero = meta.get("genero", "")
+            estilo = meta.get("estilo", "")
+            capa_album = meta.get("capa_album", "")
+            link_youtube = meta.get("link_youtube", "")
+
             caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo)
 
             if len(caracs) == EXPECTED_FEATURE_LENGTH:
-                inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)
+                inserir_musica(arquivo, caracs, artista, titulo, album, genero, estilo, capa_album, link_youtube)
             else:
                 print(f"❌ Vetor inconsistente para '{arquivo}' ({len(caracs)}), pulando.")
 
