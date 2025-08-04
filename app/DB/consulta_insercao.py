@@ -46,9 +46,9 @@ def inserir_musica(nome, caracteristicas, artista, titulo, album, genero, capa_a
         print(f"❌ Erro: Características da música '{nome}' têm tamanho incorreto ({len(caracteristicas)}). Esperado: {EXPECTED_FEATURE_LENGTH}. Não será inserida na '{DB_TABLE_NAME}'.")
         return
 
-    if links_nao_existentes(link_youtube):
-        print(f"⚠️ Música '{titulo}' já cadastrada em '{DB_TABLE_NAME}'.\n🔗 Link: '{link_youtube}'")
-        return
+    # if links_nao_existentes(link_youtube):
+    #     print(f"⚠️ Música '{titulo}' já cadastrada em '{DB_TABLE_NAME}'.\n🔗 Link: '{link_youtube}'")
+    #     return
 
     carac_str = ",".join(map(str, caracteristicas))
     with conectar() as conn:

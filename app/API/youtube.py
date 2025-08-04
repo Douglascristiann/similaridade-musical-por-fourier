@@ -61,7 +61,7 @@ def baixar_musicas(lista_de_links, pasta_download):
         'format': 'bestaudio/best',
         'outtmpl': f'{pasta_download}/%(title)s.%(ext)s',
         'quiet': False,
-        'cookiefile': '/home/jovyan/work/cache/cookies/cookies.txt',
+        'cookiefile': '/home/jovyan/work/app/cache/cookies/cookies.txt',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',

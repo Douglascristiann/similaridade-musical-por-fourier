@@ -1,4 +1,5 @@
 import discogs_client
+import requests
 
 # Seu token de acesso
 TOKEN = 'QZgdlkbRWFIbKlCVztBdCIvSYNqPKsyoLaasyyTD'
@@ -31,18 +32,51 @@ def enriquecer_metadados_discogs(lista_metadados):
                     "capa_album": release.thumb if release.thumb else ""
                 })
             else:
+                # Fallback para Deezer
+                deezer_url = f"https://api.deezer.com/search?q=artist:\"{artista}\" track:\"{musica}\""
+                resp = requests.get(deezer_url)
+                if resp.status_code == 200 and resp.json().get('data'):
+                    track = resp.json()['data'][0]
+                    genero = track['artist']['name'] if 'artist' in track and 'name' in track['artist'] else "Desconhecido"
+                    capa_album = track['album']['cover_medium'] if 'album' in track and 'cover_medium' in track['album'] else ""
+                    item.update({
+                        "genero": genero,
+                        "estilo": "Desconhecido",
+                        "capa_album": capa_album
+                    })
+                else:
+                    item.update({
+                        "genero": "Desconhecido",
+                        "estilo": "Desconhecido",
+                        "capa_album": ""
+                    })
+
+        except Exception:
+            # Fallback para Deezer em caso de erro no Discogs
+            try:
+                deezer_url = f"https://api.deezer.com/search?q=artist:\"{artista}\" track:\"{musica}\""
+                resp = requests.get(deezer_url)
+                if resp.status_code == 200 and resp.json().get('data'):
+                    track = resp.json()['data'][0]
+                    genero = track['artist']['name'] if 'artist' in track and 'name' in track['artist'] else "Desconhecido"
+                    capa_album = track['album']['cover_medium'] if 'album' in track and 'cover_medium' in track['album'] else ""
+                    item.update({
+                        "genero": genero,
+                        "estilo": "Desconhecido",
+                        "capa_album": capa_album
+                    })
+                else:
+                    item.update({
+                        "genero": "Desconhecido",
+                        "estilo": "Desconhecido",
+                        "capa_album": ""
+                    })
+            except Exception:
                 item.update({
                     "genero": "Desconhecido",
                     "estilo": "Desconhecido",
                     "capa_album": ""
                 })
-
-        except Exception:
-            item.update({
-                "genero": "Desconhecido",
-                "estilo": "Desconhecido",
-                "capa_album": ""
-            })
 
         resultados.append(item)
 

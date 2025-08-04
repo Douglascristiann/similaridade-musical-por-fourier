@@ -4,7 +4,7 @@ import sys
 import numpy as np
 import librosa
 import librosa.display
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 from librosa.feature.rhythm import tempo
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
@@ -109,14 +109,14 @@ def extrair_features_completas(y, sr):
         return np.zeros(EXPECTED_FEATURE_LENGTH)
 
 
-def extrair_caracteristicas_e_spectrograma(path, artista, titulo):
+def extrair_caracteristicas_e_spectrograma(path, artista, titulo, spectro_path=None):
     y, sr = preprocess_audio(path)
     if y is None:
         return np.zeros(EXPECTED_FEATURE_LENGTH), None
     features = extrair_features_completas(y, sr)
     nome_arquivo = os.path.splitext(os.path.basename(path))[0]
-    spectro_path = os.path.join(output_folder, f"{nome_arquivo}_spectrograma.png")
-    gerar_spectrograma(y, sr, spectro_path, artista, titulo)
+    registro_spectro = os.path.join(spectro_path, f"{nome_arquivo}_spectrograma.png")
+    gerar_spectrograma(y, sr, registro_spectro, artista, titulo)
     return features
 # =================== RECOMENDAÇÃO ===================
 def calcular_similaridade(distancia, escala=0.95):
@@ -226,7 +226,7 @@ def recomendar_knn(nome_base, vetor_base):
 
 
 # =================== EXECUÇÃO ===================
-def processar_pasta(pasta, pasta_plot, metadados):
+def processar_pasta(pasta, metadados):
     """
     Processa todos os arquivos de áudio em uma pasta:
     - extrai características,
@@ -256,14 +256,16 @@ def processar_pasta(pasta, pasta_plot, metadados):
             titulo = meta.get("titulo", "Desconhecido")
             album = meta.get("album", "")
             genero = meta.get("genero", "")
-            estilo = meta.get("estilo", "")
+            #estilo = meta.get("estilo", "")
             capa_album = meta.get("capa_album", "")
             link_youtube = meta.get("link_youtube", "")
 
-            caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo)
+            #caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo, spectro_path=PASTA_SPECTROGRAMAS)
+
+            caracs = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo, spectro_path=PASTA_SPECTROGRAMAS)
 
             if len(caracs) == EXPECTED_FEATURE_LENGTH:
-                inserir_musica(arquivo, caracs, artista, titulo, album, genero, estilo, capa_album, link_youtube)
+                inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)
             else:
                 print(f"❌ Vetor inconsistente para '{arquivo}' ({len(caracs)}), pulando.")
 
@@ -294,18 +296,18 @@ def processar_pasta(pasta, pasta_plot, metadados):
 
 
     # Gera recomendações para cada música e salva o gráfico
-    os.makedirs(pasta_plot, exist_ok=True)
+    # os.makedirs(pasta_plot, exist_ok=True)
 
-    for nome_musica, vetor in zip(nomes_validos, vetores_para_fit):
-        if len(vetor) == EXPECTED_FEATURE_LENGTH:
-            print(f"\n✨ Gerando recomendações para: {nome_musica}")
-            recomendar_knn(nome_musica, vetor)
+    # for nome_musica, vetor in zip(nomes_validos, vetores_para_fit):
+    #     if len(vetor) == EXPECTED_FEATURE_LENGTH:
+    #         print(f"\n✨ Gerando recomendações para: {nome_musica}")
+    #         recomendar_knn(nome_musica, vetor)
 
-            # Gera e salva gráfico de recomendações
-            caminho_plot = os.path.join(pasta_plot, f"{os.path.splitext(nome_musica)[0]}_recomendacoes.png")
-            plot_recomendacoes(nome_musica, vetor, caminho_plot)
-        else:
-            print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
+    #         # Gera e salva gráfico de recomendações
+    #         caminho_plot = os.path.join(pasta_plot, f"{os.path.splitext(nome_musica)[0]}_recomendacoes.png")
+    #         plot_recomendacoes(nome_musica, vetor, caminho_plot)
+    #     else:
+    #         print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
 
 
 def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
@@ -352,19 +354,19 @@ def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
     plt.close()
     print(f"📊 Gráfico salvo em: {caminho_saida}")
 
-if __name__ == "__main__":
-    pasta_audio = "/home/jovyan/work/audio"
-    pasta_spectrogramas = "/home/jovyan/work/cache/spectrogramas"
-    pasta_recomendacoes = "/home/jovyan/work/cache/spectrogramas/recomendacoes_img"
-    pasta_linksytube = "/home/jovyan/work/cache/links_youtube"
+# if __name__ == "__main__":
+#     pasta_audio = "/home/jovyan/work/audio"
+#     pasta_spectrogramas = "/home/jovyan/work/cache/spectrogramas"
+#     pasta_recomendacoes = "/home/jovyan/work/cache/spectrogramas/recomendacoes_img"
+#     pasta_linksytube = "/home/jovyan/work/cache/links_youtube"
 
     # Garante que as pastas existam
-    os.makedirs(pasta_spectrogramas, exist_ok=True)
-    os.makedirs(pasta_recomendacoes, exist_ok=True)
-    os.makedirs(pasta_linksytube, exist_ok=True)
+    # os.makedirs(pasta_spectrogramas, exist_ok=True)
+    # os.makedirs(pasta_recomendacoes, exist_ok=True)
+    # os.makedirs(pasta_linksytube, exist_ok=True)
 
-    if not os.path.exists(pasta_audio):
-        print(f"❌ Pasta de áudio não encontrada: {pasta_audio}")
-        print("Por favor, crie a pasta e coloque suas músicas lá.")
-    else:
-        processar_pasta(pasta_audio, pasta_spectrogramas, pasta_recomendacoes)
+    # if not os.path.exists(pasta_audio):
+    #     print(f"❌ Pasta de áudio não encontrada: {pasta_audio}")
+    #     print("Por favor, crie a pasta e coloque suas músicas lá.")
+    # else:
+    #     processar_pasta(pasta_audio, pasta_spectrogramas, pasta_recomendacoes)

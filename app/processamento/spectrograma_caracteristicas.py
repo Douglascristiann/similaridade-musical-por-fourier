@@ -1,8 +1,15 @@
-def gerar_spectrograma(y, sr, path_out, artista=None, titulo=None, modo='stft'):
+import os
+import sys
+import matplotlib.pyplot as plt
+import librosa
+import numpy as np
+
+def gerar_spectrograma(y, sr, path_out, artista, titulo, modo='stft'):
     """
     Gera e salva um espectrograma logarítmico para o áudio.
     modo = 'stft' ou 'mel'
     """
+    
     if y is None or sr is None:
         print(f"❌ Não foi possível gerar espectrograma para {path_out}, áudio inválido.")
         return

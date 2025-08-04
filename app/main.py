@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "API"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
 
 from processar_links import processar_link
-from extrator_fft import processar_audio_local, processar_pasta
+from extrator_fft_desmembrar import processar_pasta
 
 # Caminhos fixos usados nos scripts
 pasta_audio = "/home/jovyan/work/audio"
@@ -29,7 +29,7 @@ def main():
             caminho = input("Digite o caminho do arquivo de áudio: ").strip()
             if os.path.isfile(caminho):
                 try:
-                    processar_audio_local(caminho)
+                    #processar_audio_local(caminho)
                     print("✅ Arquivo processado com sucesso!")
                 except Exception as e:
                     print(f"❌ Erro ao processar o áudio: {e}")
