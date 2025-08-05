@@ -21,4 +21,4 @@ DB_TABLE_NAME = "tb_musicas_v3" # Usaremos a nova tabela v2
 
 # Caminhos fixos
 PASTA_SPECTROGRAMAS = "/home/jovyan/work/cache/spectrogramas"
-PASTA_RECOMENDACOES_IMG = "/home/jovyan/work/cache/recomendacoes_img"
+PASTA_PLOT= "/home/jovyan/work/cache/recomendacoes_img"

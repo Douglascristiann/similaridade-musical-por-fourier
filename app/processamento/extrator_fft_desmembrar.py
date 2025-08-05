@@ -4,7 +4,7 @@ import sys
 import numpy as np
 import librosa
 import librosa.display
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 from librosa.feature.rhythm import tempo
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 sys.path.append(os.path.join(os.path.dirname(__file__), "DB"))
 
 from consulta_insercao import inserir_musica, carregar_musicas
+from config import PASTA_RECOMENDACOES_IMG
 
 # =================== EXTRAÇÃO DE FEATURES ===================
 def preprocess_audio(path, sr=22050):
@@ -109,15 +110,29 @@ def extrair_features_completas(y, sr):
         return np.zeros(EXPECTED_FEATURE_LENGTH)
 
 
-def extrair_caracteristicas_e_spectrograma(path, artista, titulo, spectro_path=None):
+def extrair_caracteristicas_e_spectrograma(path, output_folder, artista, titulo):
+    """
+    Combina o pré-processamento, extração de features e geração de espectrograma.
+    Retorna (features, caminho_do_espectrograma).
+    """
+    # 1) Pré-processamento
     y, sr = preprocess_audio(path)
     if y is None:
+        # se falhar, vetor zero e sem espectrograma
         return np.zeros(EXPECTED_FEATURE_LENGTH), None
+
+    # 2) Extração de features puros
     features = extrair_features_completas(y, sr)
+
+    # 3) Monta e salva o espectrograma
     nome_arquivo = os.path.splitext(os.path.basename(path))[0]
-    registro_spectro = os.path.join(spectro_path, f"{nome_arquivo}_spectrograma.png")
-    gerar_spectrograma(y, sr, registro_spectro, artista, titulo)
-    return features
+    spectro_path = os.path.join(output_folder, f"{nome_arquivo}_spectrograma.png")
+    gerar_spectrograma(y, sr, spectro_path, artista, titulo)
+    print(f"📸 Espectrograma salvo em: {spectro_path}")
+
+    # 4) Retorna o vetor e o caminho do arquivo gerado
+    return features, spectro_path
+
 # =================== RECOMENDAÇÃO ===================
 def calcular_similaridade(distancia, escala=0.95):
     """
@@ -229,85 +244,97 @@ def recomendar_knn(nome_base, vetor_base):
 def processar_pasta(pasta, metadados):
     """
     Processa todos os arquivos de áudio em uma pasta:
-    - extrai características,
-    - reconhece metadados,
+    - extrai características (features e espectrograma),
     - salva no banco,
-    - gera espectrogramas,
-    - executa recomendações com gráfico.
+    - prepara recomendações.
     """
-    #criar_tabela()
-
-    # if not os.path.exists(saida_spectrogramas):
-    #     os.makedirs(saida_spectrogramas)
+    # Garante que tabela e pastas existam
+    criar_tabela()
+    os.makedirs(PASTA_SPECTROGRAMAS, exist_ok=True)
+    os.makedirs(PASTA_PLOT, exist_ok=True)
 
     print("\n🔍 Iniciando extração de características...")
 
     for arquivo in os.listdir(pasta):
-        if arquivo.lower().endswith((".mp3", ".wav")):
-            caminho = os.path.join(pasta, arquivo)
-            print(f"🎵 Processando: {arquivo}")
+        if not arquivo.lower().endswith((".mp3", ".wav")):
+            continue
 
-            meta = next((m for m in metadados if m.get("arquivo") == arquivo), None)
-            if not meta:
-                print(f"⚠️ Metadado não encontrado para '{arquivo}', pulando.")
-                continue
+        caminho = os.path.join(pasta, arquivo)
+        print(f"🎵 Processando: {arquivo}")
 
-            artista = meta.get("artista", "Desconhecido")
-            titulo = meta.get("titulo", "Desconhecido")
-            album = meta.get("album", "")
-            genero = meta.get("genero", "")
-            #estilo = meta.get("estilo", "")
-            capa_album = meta.get("capa_album", "")
-            link_youtube = meta.get("link_youtube", "")
+        # Busca metadados pelo nome de arquivo
+        meta = next((m for m in metadados if m.get("arquivo") == arquivo), None)
+        if not meta:
+            print(f"⚠️ Metadado não encontrado para '{arquivo}', pulando.")
+            continue
 
-            #caracs, _ = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo, spectro_path=PASTA_SPECTROGRAMAS)
+        artista     = meta.get("artista", "Desconhecido")
+        titulo      = meta.get("titulo",  "Desconhecido")
+        album       = meta.get("album",   "")
+        genero      = meta.get("genero",  "")
+        capa_album  = meta.get("capa_album", "")
+        link_youtube= meta.get("link_youtube", "")
 
-            caracs = extrair_caracteristicas_e_spectrograma(caminho, artista, titulo, spectro_path=PASTA_SPECTROGRAMAS)
+        # === CORREÇÃO AQUI: extrai features e espectrograma em duas variáveis ===
+        caracs, spectro = extrair_caracteristicas_e_spectrograma(
+            caminho,
+            PASTA_SPECTROGRAMAS,
+            artista,
+            titulo
+        )
 
-            if len(caracs) == EXPECTED_FEATURE_LENGTH:
-                inserir_musica(arquivo, caracs, artista, titulo, album, genero, capa_album, link_youtube)
-            else:
-                print(f"❌ Vetor inconsistente para '{arquivo}' ({len(caracs)}), pulando.")
+        # Verifica integridade do vetor
+        if len(caracs) != EXPECTED_FEATURE_LENGTH:
+            print(f"❌ Vetor inconsistente para '{arquivo}' ({len(caracs)}), pulando.")
+            continue
+
+        # Insere no banco
+        inserir_musica(
+            arquivo,
+            caracs,
+            artista,
+            titulo,
+            album,
+            genero,
+            capa_album,
+            link_youtube
+        )
 
     print("\n✅ Extração finalizada. Preparando recomendações...")
 
-    todas_musicas_validas = carregar_musicas()
-    if len(todas_musicas_validas) < 2:
+    todas_musicas = carregar_musicas()
+    if len(todas_musicas) < 2:
         print("⚠️ Não há músicas suficientes para recomendar.")
         return
 
-    vetores_para_fit = np.array([m[1] for m in todas_musicas_validas], dtype=np.float64)
-    nomes_validos = [m[0] for m in todas_musicas_validas]
+    # Prepara vetores e nomes para o scaler
+    vetores = np.array([m[1] for m in todas_musicas], dtype=np.float64)
+    nomes   = [m[0] for m in todas_musicas]
 
     global GLOBAL_SCALER, GLOBAL_PCA
-
-    # Ajusta o scaler global
-    GLOBAL_SCALER = StandardScaler()
-    GLOBAL_SCALER.fit(vetores_para_fit)
-
-    # Se quiser usar PCA, inicialize e ajuste aqui também (opcional)
-    # Exemplo para 95% de variância explicada:
+    GLOBAL_SCALER = StandardScaler().fit(vetores)
+    # Se desejar usar PCA, descomente:
     # GLOBAL_PCA = PCA(n_components=0.95)
-    # GLOBAL_PCA.fit(GLOBAL_SCALER.transform(vetores_para_fit))
+    # GLOBAL_PCA.fit(GLOBAL_SCALER.transform(vetores))
 
-    # Usa o primeiro vetor como base só para aplicar_transformacoes
-    vetor_base = todas_musicas_validas[0][1]
-    _, _ = aplicar_transformacoes(vetores_para_fit, vetor_base)
+    # Exemplo de uso de aplicar_transformacoes (opcional)
+    vetor_base = vetores[0]
+    _, _ = aplicar_transformacoes(vetores, vetor_base)
 
+    # Geração de gráficos de recomendação
+    for nome_musica, vetor in zip(nomes, vetores):
+        if len(vetor) != EXPECTED_FEATURE_LENGTH:
+            print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
+            continue
 
-    # Gera recomendações para cada música e salva o gráfico
-    # os.makedirs(pasta_plot, exist_ok=True)
+        print(f"\n✨ Gerando recomendações para: {nome_musica}")
+        recomendar_knn(nome_musica, vetor)
 
-    # for nome_musica, vetor in zip(nomes_validos, vetores_para_fit):
-    #     if len(vetor) == EXPECTED_FEATURE_LENGTH:
-    #         print(f"\n✨ Gerando recomendações para: {nome_musica}")
-    #         recomendar_knn(nome_musica, vetor)
-
-    #         # Gera e salva gráfico de recomendações
-    #         caminho_plot = os.path.join(pasta_plot, f"{os.path.splitext(nome_musica)[0]}_recomendacoes.png")
-    #         plot_recomendacoes(nome_musica, vetor, caminho_plot)
-    #     else:
-    #         print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
+        caminho_plot = os.path.join(
+            PASTA_RECOMENDACOES_IMG,
+            f"{os.path.splitext(nome_musica)[0]}_recomendacoes.png"
+        )
+        plot_recomendacoes(nome_musica, vetor, caminho_plot)
 
 
 def plot_recomendacoes(nome_base, vetor_base, caminho_saida):
