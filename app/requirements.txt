@@ -1,0 +1,11 @@
+numpy
+shazamio
+librosa
+numpy
+matplotlib
+scikit-learn
+requests
+tinytag
+mysql-connector-python
+yt_dlp
+discogs_client
