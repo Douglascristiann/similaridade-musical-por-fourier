@@ -166,78 +166,58 @@ def aplicar_transformacoes(vetores, vetor_base):
 
 
 def recomendar_knn(nome_base, vetor_base):
+    """
+    Retorna as top-3 faixas mais próximas de vetor_base,
+    excluindo a própria nome_base.
+    """
     musicas = carregar_musicas()
     if len(musicas) <= 1:
         print("⚠️ Não há músicas suficientes.")
         return []
 
+    # Descompacta colunas
     nomes, vetores, artistas, titulos, links = zip(*musicas)
 
-    try:
-        vetores_np = np.array(list(vetores), dtype=np.float64)
-    except ValueError as e:
-        print(f"❌ Erro ao converter vetores: {e}")
-        return []
-
-    vetor_base_np = np.array(vetor_base, dtype=np.float64)  # <<<<< COLOQUE ANTES!
-
-    # Aqui agora pode chamar
-    aplicar_transformacoes(vetores_np, vetor_base_np)
-
-    if GLOBAL_SCALER is None:
-        print("❌ Modelos ML não disponíveis.")
-        return []
-
-    idx = nomes.index(nome_base) if nome_base in nomes else -1
-
-    vetores_comp = list(vetores)
-    nomes_comp = list(nomes)
-    artistas_comp = list(artistas)
-    titulos_comp = list(titulos)
-    links_comp = list(links)
-
-    if idx >= 0:
-        vetores_comp.pop(idx)
-        nomes_comp.pop(idx)
-        artistas_comp.pop(idx)
-        titulos_comp.pop(idx)
-        links_comp.pop(idx)
-
-    if not vetores_comp:
-        return []
-
+    # Converte tudo de uma vez
+    vetores_np    = np.array(vetores, dtype=np.float64)
     vetor_base_np = np.array(vetor_base, dtype=np.float64)
 
-    if len(vetor_base_np) != EXPECTED_FEATURE_LENGTH:
-        print(f"❌ Tamanho do vetor base inválido: {len(vetor_base_np)}")
+    # Filtra fora a faixa-base
+    vetores_comp  = [v for n, v in zip(nomes, vetores_np) if n != nome_base]
+    nomes_comp    = [n for n in nomes if n != nome_base]
+    artistas_comp = [a for n, a in zip(nomes, artistas) if n != nome_base]
+    titulos_comp  = [t for n, t in zip(nomes, titulos)  if n != nome_base]
+    links_comp    = [l for n, l in zip(nomes, links)    if n != nome_base]
+
+    if not vetores_comp:
+        print("⚠️ Sem faixas para comparar após filtrar a base.")
         return []
 
-    # Aplica transformações
-    vetores_reduzidos, vetor_base_reduzido = aplicar_transformacoes(vetores_comp, vetor_base_np)
+    # Aplica redução e escala (PCA/Scaler dentro)
+    vetores_red, vetor_base_red = aplicar_transformacoes(vetores_comp, vetor_base_np)
 
-    # KNN
-    n_neighbors_val = min(3, len(vetores_reduzidos))
-    model = NearestNeighbors(n_neighbors=n_neighbors_val, metric='cosine')
-    model.fit(vetores_reduzidos)
-    distancias, indices = model.kneighbors(vetor_base_reduzido)
+    # KNN com similaridade de cosseno
+    k = min(3, len(vetores_red))
+    model = NearestNeighbors(n_neighbors=k, metric='cosine')
+    model.fit(vetores_red)
+    distancias, indices = model.kneighbors([vetor_base_red])
 
-    # Retorna resultados
+    # Monta lista de recomendações
     resultados = []
-    for rank, (i, dist) in enumerate(zip(indices[0], distancias[0]), 1):
-        similaridade = calcular_similaridade(dist)
+    for rank, (i, d) in enumerate(zip(indices[0], distancias[0]), start=1):
+        similar = calcular_similaridade(d)
         resultados.append({
             "rank": rank,
-            "titulo": titulos_comp[i] if titulos_comp[i] != "Não Encontrado" else nomes_comp[i],
+            "titulo": titulos_comp[i] or nomes_comp[i],
             "artista": artistas_comp[i],
             "link": links_comp[i],
-            "similaridade": similaridade
+            "similaridade": similar
         })
 
+    # Exibe no console
     print(f"🎯 Recomendações para '{nome_base}':")
     for rec in resultados:
         print(f"    {rec['rank']}. {rec['titulo']} — {rec['artista']} (link: {rec['link']}) [similaridade: {rec['similaridade']}%]")
-
-    return resultados
 
 
 # =================== EXECUÇÃO ===================
@@ -248,10 +228,9 @@ def processar_pasta(pasta, metadados):
     - salva no banco,
     - prepara recomendações.
     """
-    # Garante que tabela e pastas existam
-    criar_tabela()
+    
     os.makedirs(PASTA_SPECTROGRAMAS, exist_ok=True)
-    os.makedirs(PASTA_PLOT, exist_ok=True)
+    os.makedirs(PASTA_RECOMENDACOES_IMG, exist_ok=True)
 
     print("\n🔍 Iniciando extração de características...")
 
@@ -321,11 +300,11 @@ def processar_pasta(pasta, metadados):
     vetor_base = vetores[0]
     _, _ = aplicar_transformacoes(vetores, vetor_base)
 
-    # Geração de gráficos de recomendação
-    for nome_musica, vetor in zip(nomes, vetores):
-        if len(vetor) != EXPECTED_FEATURE_LENGTH:
-            print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
-            continue
+    # remoção sugerida pelo CHAT loop de todas as musicas em banco
+    # for nome_musica, vetor in zip(nomes, vetores):
+    #     if len(vetor) != EXPECTED_FEATURE_LENGTH:
+    #         print(f"⚠️ Pulando '{nome_musica}' (vetor inválido: {len(vetor)}).")
+    #         continue
 
         print(f"\n✨ Gerando recomendações para: {nome_musica}")
         recomendar_knn(nome_musica, vetor)
