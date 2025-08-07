@@ -8,10 +8,13 @@ DB_CONFIG = {
     "database": "dbmusicadata"
 }
 
-DB_TABLE_NAME = "tb_musicas_v4"     # ← nova tabela
+DB_TABLE_NAME = "tb_musicas_v4"
 AUDD_TOKEN    = "194e979e8e5d531ffd6d54941f5b7977"
 
 EXPECTED_FEATURE_LENGTH = 161
 
-# Caminho para a pasta de áudio e espectrogramas
+# Pasta de áudio (usada também para salvar espectrogramas)
 AUDIO_FOLDER = "/home/jovyan/work/audio"
+
+# → Token Discogs (crie em https://www.discogs.com/settings/developers)
+DISCOGS_TOKEN = "QZgdlkbRWFIbKlCVztBdCIvSYNqPKsyoLaasyyTD"
