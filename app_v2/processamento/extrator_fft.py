@@ -16,7 +16,6 @@ from utils.youtube import buscar_youtube_link
 
 logger = logging.getLogger('extrator_fft')
 
-
 def extrair_caracteristicas_e_spectrograma(path, pasta_out, artista, titulo):
     logger.info(f"[FEAT] Gerando features para: {path}")
     y, sr = preprocess_audio(path)
@@ -31,32 +30,32 @@ def extrair_caracteristicas_e_spectrograma(path, pasta_out, artista, titulo):
     gerar_spectrograma(y, sr, spec_path, artista, titulo)
     logger.info(f"[SPEC] Spectrograma salvo em: {spec_path}")
 
+    # libera áudio da memória
     del y, sr
     gc.collect()
     return features, spec_path
 
-
 def processar_audio_local(caminho_audio, skip_recommend=False):
     nome = os.path.basename(caminho_audio)
 
-    # 1) Sempre começa checando no banco
+    # 1) Checa existência no DB antes de tudo
     if musica_existe(nome):
-        logger.info(f"[SKIP] '{nome}' já cadastrado. Pulando tudo.")
+        logger.info(f"[SKIP] '{nome}' já cadastrado. Pulando.")
         return
 
     logger.info(f"[PROC] Iniciando: {nome}")
 
-    # 2) Reconhecimento de metadados
+    # 2) Reconhecimento unificado (Discogs → Shazam → AudD → Tags)
     try:
         artista, titulo, album, genero, capa = asyncio.run(
             reconhecer_musica(caminho_audio)
         )
-        logger.info(f"[SHZ] {artista} — {titulo}")
+        logger.info(f"[META] {artista} — {titulo} | Álbum: {album} | Gênero: {genero}")
     except Exception as e:
-        logger.error(f"[SHZ] Falha no reconhecimento: {e}")
+        logger.error(f"[META] Falha no reconhecimento: {e}")
         return
 
-    # 3) Link YouTube
+    # 3) Busca link YouTube
     try:
         link = buscar_youtube_link(artista, titulo) or "Não Encontrado"
         logger.info(f"[YTD] {link}")
@@ -64,7 +63,7 @@ def processar_audio_local(caminho_audio, skip_recommend=False):
         link = "Não Encontrado"
         logger.error(f"[YTD] Falha ao buscar link: {e}")
 
-    # 4) Extrair features + gerar spectrograma
+    # 4) Extrai features + gera espectrograma
     pasta_spec = os.path.join(AUDIO_FOLDER, 'spectrogramas')
     features, _ = extrair_caracteristicas_e_spectrograma(
         caminho_audio, pasta_spec, artista, titulo
@@ -74,7 +73,7 @@ def processar_audio_local(caminho_audio, skip_recommend=False):
                      f"{None if features is None else len(features)}/{EXPECTED_FEATURE_LENGTH}")
         return
 
-    # 5) Inserir no banco
+    # 5) Insere no banco
     try:
         inserir_musica(nome, features, artista, titulo, album, genero, capa, link)
         logger.info(f"[DB] '{nome}' inserido com sucesso.")
@@ -82,14 +81,14 @@ def processar_audio_local(caminho_audio, skip_recommend=False):
         logger.error(f"[DB] Falha ao inserir '{nome}': {e}")
         return
 
-    # libera memória
-    del features
-    gc.collect()
-
-    # 6) Gerar recomendações
+    # 6) Gera recomendações (usa o vetor antes de liberar)
     if not skip_recommend:
         preparar_modelos_recomendacao()
         try:
             recomendar_knn(nome, features)
         except Exception as e:
             logger.error(f"[REC] Falha nas recomendações: {e}")
+
+    # 7) Limpeza final de memória
+    del features
+    gc.collect()
