@@ -3,74 +3,65 @@
 import os
 import sys
 
-# Adiciona os diretórios da API e do processamento ao path
-sys.path.append(os.path.join(os.path.dirname(__file__), "API"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "processamento"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "database"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "recomendacao"))
+BASE = os.path.dirname(__file__)
+for p in ("database","API","processamento","recomendacao","utils"):
+    sys.path.append(os.path.join(BASE, p))
 
-from processar_links import processar_link
-from extrator_fft import processar_audio_local
-from recomendar import preparar_modelos_recomendacao
-from database.db import criar_tabela
+from processamento.processar_links   import processar_link
+from processamento.extrator_fft       import processar_audio_local
+from recomendacao.recomendar          import preparar_modelos_recomendacao
+from database.db                      import criar_tabela
 
-# Caminhos fixos usados nos scripts
-pasta_audio = "/home/jovyan/work/audio"
-caminho_arquivo_links = "/home/jovyan/work/cache/links_youtube/links.txt"
+AUDIO_FOLDER = "/home/jovyan/work/audio"
+LINKS_FILE   = "/home/jovyan/work/cache/links_youtube/links.txt"
 
 def menu():
-    print("\n=== Menu de Processamento de Áudio ===")
-    print("1. Inserir arquivo de áudio local")
-    print("2. Inserir link do YouTube")
-    print("3. Gerar recomendações para todas as músicas")
-    print("0. Sair")
-    return input("Escolha uma opção: ").strip()
+    print("\n🎵=== MusicData Pro ===🎵")
+    print("1) Processar áudio local")
+    print("2) Processar link do YouTube")
+    print("3) Upload em massa (só banco)")
+    print("4) Recalibrar & Recomendar")
+    print("0) Sair")
+    return input("Opção: ").strip()
+
+def bulk_upload(pasta):
+    print(f"[BULK] Iniciando upload em massa de: {pasta}")
+    for f in os.listdir(pasta):
+        if f.lower().endswith((".mp3",".wav")):
+            caminho = os.path.join(pasta, f)
+            # skip_recommend=True para não gerar recomendações
+            processar_audio_local(caminho, skip_recommend=True)
+    print("[BULK] Upload em massa concluído.")
 
 def main():
-    os.makedirs(pasta_audio, exist_ok=True)
-    os.makedirs(os.path.dirname(caminho_arquivo_links), exist_ok=True)
-    os.makedirs("/home/jovyan/work/cache/spectrogramas", exist_ok=True)
-    os.makedirs("/home/jovyan/work/cache/recomendacoes_img", exist_ok=True)
-    
+    os.makedirs(AUDIO_FOLDER, exist_ok=True)
+    os.makedirs(os.path.dirname(LINKS_FILE), exist_ok=True)
+
     criar_tabela()
     preparar_modelos_recomendacao()
 
     while True:
-        opcao = menu()
-
-        if opcao == "1":
-            caminho = input("Digite o caminho do arquivo de áudio: ").strip()
-            if os.path.isfile(caminho):
-                try:
-                    processar_audio_local(caminho)
-                    print("✅ Arquivo processado com sucesso!")
-                except Exception as e:
-                    print(f"❌ Erro ao processar o áudio: {e}")
-            else:
-                print("❌ Caminho inválido ou arquivo inexistente.")
-
-        elif opcao == "2":
-            link = input("Digite o link do YouTube: ").strip()
-            caminho_arquivo, mensagem = processar_link(link, caminho_arquivo_links, pasta_audio)
-            print(mensagem)
-            if caminho_arquivo:
-                try:
-                    processar_audio_local(caminho_arquivo)
-                    print("✅ Áudio do YouTube processado com sucesso!")
-                except Exception as e:
-                    print(f"❌ Erro ao processar o áudio baixado: {e}")
-        
-        elif opcao == "3":
-            try:
-                preparar_modelos_recomendacao(forcar_recalibragem=True)
-            except Exception as e:
-                print(f"❌ Erro ao recalibrar e gerar recomendações: {e}")
-
-        elif opcao == "0":
-            print("Encerrando...")
+        opc = menu()
+        if opc == "1":
+            c = input("Caminho do arquivo: ").strip()
+            processar_audio_local(c)
+        elif opc == "2":
+            link = input("Link YouTube: ").strip()
+            fn, msg = processar_link(link, LINKS_FILE, AUDIO_FOLDER)
+            print(msg)
+            if fn:
+                processar_audio_local(fn)
+        elif opc == "3":
+            pasta = input("Pasta para upload em massa: ").strip()
+            bulk_upload(pasta)
+        elif opc == "4":
+            preparar_modelos_recomendacao(forcar_recalibragem=True)
+            print("✅ Modelos recalibrados.")
+        elif opc == "0":
+            print("👋 Até mais!")
             break
         else:
-            print("❌ Opção inválida. Tente novamente.")
+            print("❌ Opção inválida.")
 
 if __name__ == "__main__":
     main()

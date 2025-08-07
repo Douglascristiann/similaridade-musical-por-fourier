@@ -2,131 +2,78 @@
 
 import os
 import numpy as np
-import librosa
-import librosa.display
-import matplotlib.pyplot as plt
 import asyncio
+import logging
 
-from config import EXPECTED_FEATURE_LENGTH, PASTA_SPECTROGRAMAS
-from database.db import inserir_musica
-from API.reconhecimento import reconhecer_musica
+from API.reconhecimento_unificado import reconhecer_musica
+from database.db import inserir_musica, musica_existe
+from recomendacao.recomendar import preparar_modelos_recomendacao, recomendar_knn
+from processamento.features import preprocess_audio, extrair_features_completas
+from processamento.spectrograma import gerar_spectrograma
+from utils.youtube import buscar_youtube_link
+import config  # traz AUDIO_FOLDER de config.py
 
-# =================== EXTRAÇÃO DE FEATURES ===================
-def preprocess_audio(path, sr=22050):
-    """Carrega e pré-processa um arquivo de áudio (normaliza e remove silêncios)."""
-    # ... (código existente) ...
-    try:
-        y, _ = librosa.load(path, sr=sr, mono=True)
-        y = librosa.util.normalize(y)
-        y, _ = librosa.effects.trim(y, top_db=20)
-        if len(y) < sr * 0.1:
-            print(f"⚠️ Áudio muito curto após trim: {path}. Pode causar problemas na extração de features.")
-            return None, None
-        return y, sr
-    except Exception as e:
-        print(f"❌ Erro ao pré-processar áudio {path}: {e}")
-        return None, None
-
-def extrair_features_completas(y, sr):
-    """
-    Extrai um conjunto completo de características de áudio.
-    """
-    # ... (código existente) ...
-    if y is None or sr is None or len(y) < sr * 0.2:
-        return np.zeros(EXPECTED_FEATURE_LENGTH)
-
-    try:
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
-        mfcc_delta = librosa.feature.delta(mfcc)
-        mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
-
-        mfcc_mean = np.mean(mfcc, axis=1)
-        mfcc_delta_mean = np.mean(mfcc_delta, axis=1)
-        mfcc_delta2_mean = np.mean(mfcc_delta2, axis=1)
-
-        chroma = np.mean(librosa.feature.chroma_stft(y=y, sr=sr), axis=1)
-        tonnetz = np.mean(librosa.feature.tonnetz(y=librosa.effects.harmonic(y), sr=sr), axis=1)
-        contrast = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr), axis=1)
-        
-        try:
-            tempo_val = librosa.beat.tempo(y=y, sr=sr)[0]
-        except Exception as e:
-            tempo_val = 0.0
-
-        rms = np.mean(librosa.feature.rms(y=y))
-        zcr = np.mean(librosa.feature.zero_crossing_rate(y))
-        rolloff = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
-        bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
-
-        features = [
-            mfcc_mean, mfcc_delta_mean, mfcc_delta2_mean,
-            chroma, tonnetz, contrast,
-            [tempo_val], [rms], [zcr], [rolloff], [bandwidth]
-        ]
-        final_features = np.concatenate(features)
-
-        if len(final_features) != EXPECTED_FEATURE_LENGTH:
-            print(f"⚠️ Ajustando vetor de features: {len(final_features)} → {EXPECTED_FEATURE_LENGTH}")
-            final_features = np.pad(final_features, (0, max(0, EXPECTED_FEATURE_LENGTH - len(final_features))))[:EXPECTED_FEATURE_LENGTH]
-
-        return final_features
-
-    except Exception as e:
-        print(f"❌ Erro ao extrair features completas: {e}")
-        return np.zeros(EXPECTED_FEATURE_LENGTH)
-
-def gerar_spectrograma(y, sr, path_out, artista=None, titulo=None, modo='stft'):
-    """Gera e salva um espectrograma logarítmico para o áudio."""
-    # ... (código existente) ...
-    if y is None or sr is None:
-        print(f"❌ Não foi possível gerar espectrograma para {path_out}, áudio inválido.")
-        return
-
-    os.makedirs(os.path.dirname(path_out), exist_ok=True)
-    plt.figure(figsize=(10, 4))
-
-    if modo == 'mel':
-        S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
-        S_db = librosa.power_to_db(S, ref=np.max)
-        librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel', cmap='magma')
-    else:
-        S = librosa.stft(y)
-        S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
-        librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='log', cmap='magma')
-
-    plt.colorbar(format='%+2.0f dB')
-    plt.title(f"{titulo or 'Sem Título'} — {artista or 'Desconhecido'}", fontsize=12)
-    plt.tight_layout()
-    plt.savefig(path_out, dpi=120)
-    plt.close()
+logger = logging.getLogger('extrator_fft')
 
 
-def processar_audio_local(caminho):
-    """Processa um arquivo de áudio local, extraindo metadados, features e salvando no banco."""
-    print(f"🎵 Processando arquivo local: {caminho}")
-
-    # Reconhecimento e busca de link do youtube
-    # A função reconhecer_musica já faz o trabalho de buscar metadados
-    artista, titulo, album, genero, capa_album = asyncio.run(reconhecer_musica(caminho))
-
-    # A função buscar_youtube_link não está mais neste módulo,
-    # então o link_youtube pode ser 'Não Encontrado' ou obtido de forma diferente.
-    link_youtube = 'Não Encontrado'
-    
-    # Extração de features e geração de espectrograma
-    y, sr = preprocess_audio(caminho) # << AQUI ESTÁ O ERRO
+def extrair_caracteristicas_e_spectrograma(path, pasta_out, artista, titulo):
+    logger.info(f"[PROC] Gerando features e espectrograma para: {path}")
+    y, sr = preprocess_audio(path)
     if y is None:
-        return
-        
-    features = extrair_features_completas(y, sr)
-    
-    nome_arquivo = os.path.splitext(os.path.basename(caminho))[0]
-    spectro_path = os.path.join(PASTA_SPECTROGRAMAS, f"{nome_arquivo}_spectrograma.png")
-    gerar_spectrograma(y, sr, spectro_path, artista, titulo)
-    print(f"📸 Espectrograma salvo em: {spectro_path}")
+        return np.zeros(config.EXPECTED_FEATURE_LENGTH), None
 
-    # Inserção no banco
-    if len(features) == EXPECTED_FEATURE_LENGTH:
-        inserir_musica(nome_arquivo, features, artista, titulo, album, genero, capa_album, link_youtube)
-    else:
-        print(f"❌ Vetor de características inconsistente ({len(features)}), não será inserido no banco.")
+    features = extrair_features_completas(y, sr)
+    nome_base = os.path.splitext(os.path.basename(path))[0]
+    spec_path = os.path.join(pasta_out, f"{nome_base}.png")
+    gerar_spectrograma(y, sr, spec_path, artista, titulo)
+    logger.info(f"[SPEC] Spectrograma salvo em: {spec_path}")
+
+    return features, spec_path
+
+
+def processar_audio_local(caminho_audio, skip_recommend=False, skip_db_check=False):
+    """
+    Processa um arquivo de áudio:
+      1) Verifica no banco (se skip_db_check=False)
+      2) Reconhece metadados
+      3) Busca link YouTube
+      4) Extrai features + espectrograma
+      5) Insere no banco
+      6) (Opcional) Gera recomendações
+    """
+    nome = os.path.basename(caminho_audio)
+
+    # 1️⃣ Checa existência no banco
+    if not skip_db_check and musica_existe(nome):
+        logger.warning(f"⚠️ '{nome}' já cadastrado no banco. Pulando.")
+        return
+
+    logger.info(f"[PROC] Iniciando processamento: {nome}")
+
+    # 2️⃣ Reconhecimento
+    artista, titulo, album, genero, capa = asyncio.run(
+        reconhecer_musica(caminho_audio)
+    )
+    logger.info(f"[SHZ] Reconhecido: {artista} — {titulo}")
+
+    # 3️⃣ YouTube
+    link = buscar_youtube_link(artista, titulo)
+    logger.info(f"[YTD] Link YouTube: {link}")
+
+    # 4️⃣ Features + espectrograma
+    pasta_spec = os.path.join(config.AUDIO_FOLDER, 'spectrogramas')
+    features, _ = extrair_caracteristicas_e_spectrograma(
+        caminho_audio, pasta_spec, artista, titulo
+    )
+    if len(features) != config.EXPECTED_FEATURE_LENGTH:
+        logger.error(f"❌ Features inconsistentes: {len(features)}/{config.EXPECTED_FEATURE_LENGTH}")
+        return
+
+    # 5️⃣ Inserção no banco
+    inserir_musica(nome, features, artista, titulo, album, genero, capa, link)
+    logger.info(f"[DB] '{nome}' inserido com sucesso.")
+
+    # 6️⃣ Recomendações
+    if not skip_recommend:
+        preparar_modelos_recomendacao()
+        recomendar_knn(nome, features)
