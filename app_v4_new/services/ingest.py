@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json, logging, traceback
-import numpy as np
 import librosa
 
 from app_v4_new.config import DOWNLOADS_DIR, COOKIEFILE_PATH, AUTO_DELETE_DOWNLOADED
@@ -11,7 +10,7 @@ from app_v4_new.audio.extrator_fft import extrair_features_completas
 from app_v4_new.database.db import upsert_musica
 from app_v4_new.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
 from app_v4_new.services.metadata import enrich_metadata, _parse_title_tokens
-from app_v4_new.services.youtube_backfill import find_youtube_link
+from app_v4_new.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
 
 log = logging.getLogger("FourierMatch")
 
@@ -23,11 +22,14 @@ def _bar_from_pct(pct: float, width: int = 20) -> str:
 def _clean_link(url: str) -> str:
     try:
         from urllib.parse import urlparse, parse_qs
-        if not url: return url
+        if not url:
+            return url
         pu = urlparse(url)
         if "youtube.com" in pu.netloc and pu.path == "/watch":
-            q = parse_qs(pu.query); v = q.get("v", [None])[0]
-            if v: return f"https://www.youtube.com/watch?v={v}"
+            q = parse_qs(pu.query)
+            v = q.get("v", [None])[0]
+            if v:
+                return f"https://www.youtube.com/watch?v={v}"
         return url
     except Exception:
         return url
@@ -103,6 +105,7 @@ def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) 
         log.error("❌ yt-dlp não está instalado. Instale com:  pip install yt-dlp")
         return []
     pasta_destino.mkdir(parents=True, exist_ok=True)
+    from app_v4_new.config import COOKIEFILE_PATH
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": str(pasta_destino / "%(title)s-%(id)s.%(ext)s"),
@@ -145,13 +148,15 @@ def processar_audio_local(
         vec = extrair_features_completas(y, _sr)
         duration_sec = float(librosa.get_duration(y=y, sr=_sr))
 
-        # Extrai “hints” de metadado do sidecar .info.json (se existir) ou do nome
+        # Hints do sidecar .info.json (se existir) ou do nome do arquivo
         artist_hint = track_hint = album_hint = yt_thumb = None
         if youtube_meta is None:
             side = arquivo.with_suffix(".info.json")
             if side.exists():
-                try: youtube_meta = json.loads(side.read_text())
-                except Exception: youtube_meta = None
+                try:
+                    youtube_meta = json.loads(side.read_text())
+                except Exception:
+                    youtube_meta = None
         if youtube_meta:
             artist_hint = youtube_meta.get("artist") or youtube_meta.get("uploader") or youtube_meta.get("channel")
             track_hint  = youtube_meta.get("track")
@@ -173,7 +178,9 @@ def processar_audio_local(
             a3, tr3, alb3 = _parse_title_tokens(arquivo.stem)
             artist_hint, track_hint, album_hint = a3, tr3, alb3
 
+        # Metadados oficiais
         meta_hints = {"artist": artist_hint, "title": track_hint, "album": album_hint, "thumb": yt_thumb}
+        log.info("🟢 Buscando metadados (Spotify → Discogs → Deezer → Shazam)…")
         md = enrich_metadata(arquivo, duration_sec, meta_hints)
         if not md["accepted"]:
             log.warning(f"🔒 Sem metadados confiáveis para '{arquivo.name}'. Enfileirado em pendentes.csv.")
@@ -190,19 +197,25 @@ def processar_audio_local(
 
         # Decide link a salvar:
         # - Se veio do YouTube (origem_link/webpage_url), mantém
-        # - Se é arquivo local, tenta backfill SEM cookies
+        # - Se é arquivo local, faz backfill **SIMPLES** (ytsearch1:)
         link_final = (youtube_meta or {}).get("webpage_url") or origem_link
         if link_final and _is_url(link_final):
             link_final = _clean_link(link_final)
+            log.info(f"🔗 Link (origem YouTube): {link_final}")
         else:
-            yt_link = find_youtube_link(
-                artista if artista and artista != "desconhecido" else artist_hint,
-                titulo  if titulo  and titulo  != arquivo.stem else track_hint,
-                album or album_hint,
-                duration_sec
-            )
-            # **Nunca** grava caminho local: se não achou, None
-            link_final = yt_link or None
+            # consulta simples baseada nos metadados resolvidos;
+            # se título/artist não foram confiáveis, cai nos hints
+            title_q  = titulo if (titulo and titulo != arquivo.stem) else track_hint
+            artist_q = artista if (artista and artista.lower() != "desconhecido") else artist_hint
+
+            log.info("🔎 Backfill YouTube (simples yt_dlp/ytsearch1) …")
+            link = buscar_youtube_link(artist_q, title_q)
+            if link:
+                link_final = link
+                log.info(f"✅ Backfill YouTube: {link_final}")
+            else:
+                link_final = None
+                log.info("⚠️ Backfill YouTube: nenhum link encontrado.")
 
         log.info("💾 Gravando no MySQL (tabela)…")
         rid = upsert_musica(

@@ -45,6 +45,9 @@ def upsert_musica(
     capa_album: Optional[str],
     link_youtube: Optional[str],
 ) -> int:
+    """
+    Insere se não existir; caso exista, ATUALIZA todos os campos (inclui link_youtube).
+    """
     vec_str = ",".join(str(float(x)) for x in caracteristicas.tolist())
     with conectar() as conn:
         with conn.cursor() as cur:
@@ -60,8 +63,9 @@ def upsert_musica(
             else:
                 cur.execute(f"""
                     UPDATE {DB_TABLE_NAME}
-                       SET caracteristicas=%s, artista=%s, titulo=%s, album=%s,
-                           genero=%s, capa_album=%s, link_youtube=%s
+                       SET caracteristicas=%s,
+                           artista=%s, titulo=%s, album=%s, genero=%s,
+                           capa_album=%s, link_youtube=%s
                      WHERE id=%s
                 """, (vec_str, artista, titulo, album, genero, capa_album, link_youtube, rid))
                 conn.commit()
@@ -81,10 +85,6 @@ def listar(limit: int = 20) -> List[Dict[str, Any]]:
             return [dict(r) for r in cur.fetchall()]
 
 def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
-    """
-    Retorna X (n x d), ids (n), metas (dict com nome/titulo/artista/link)
-    Ignora linhas com vetor inválido.
-    """
     with conectar() as conn:
         with conn.cursor(dictionary=True) as cur:
             cur.execute(f"""
@@ -110,6 +110,7 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
             continue
 
     if not feats:
+        import numpy as np
         return np.zeros((0, 1)), [], []
     X = np.asarray(feats, dtype=float)
     return X, ids, metas
