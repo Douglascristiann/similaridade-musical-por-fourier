@@ -16,8 +16,12 @@ def _normalize_simple_rms(y: np.ndarray, target_rms: float = 0.1) -> np.ndarray:
     return np.clip(y, -1.0, 1.0)
 
 def normalize_loudness(y: np.ndarray, sr: int, target_lufs: float = -23.0) -> np.ndarray:
+    """
+    Normalização de loudness. Se 'pyloudnorm' estiver disponível, usa LUFS (EBU R128).
+    Caso contrário, cai para normalização por RMS (já estabiliza ZCR/rolloff).
+    """
     try:
-        import pyloudnorm as pyln  # optional
+        import pyloudnorm as pyln  # opcional
         meter = pyln.Meter(sr)
         loudness = meter.integrated_loudness(y.astype(float))
         y = pyln.normalize.loudness(y.astype(float), loudness, target_lufs).astype(np.float32)
@@ -26,6 +30,7 @@ def normalize_loudness(y: np.ndarray, sr: int, target_lufs: float = -23.0) -> np
         return _normalize_simple_rms(y)
 
 def _beat_sync(F: np.ndarray, beat_frames: np.ndarray | list[int]) -> np.ndarray:
+    """Agregação sincronizada ao pulso (mediana). Entrada F: (n x t)."""
     if F.ndim == 1:
         F = F[np.newaxis, :]
     if beat_frames is None or len(beat_frames) < 2:
@@ -37,22 +42,36 @@ def _beat_sync(F: np.ndarray, beat_frames: np.ndarray | list[int]) -> np.ndarray
     return Fs
 
 def _rotate_chroma_to_c(C: np.ndarray) -> tuple[np.ndarray, int]:
+    """Rotaciona chroma 12xT para que a classe mais forte caia em Dó (índice 0)."""
     if C.shape[0] != 12:
-        raise ValueError("Chroma must have 12 bands (12 x T).")
+        raise ValueError("Chroma deve ter 12 bandas (12 x T).")
     prof = C.sum(axis=1)
     shift = int(np.argmax(prof)) if prof.size else 0
     return np.roll(C, -shift, axis=0), shift
 
 def _tiv6_from_chroma(C: np.ndarray) -> np.ndarray:
+    """TIV-6 via DFT do chroma (12 classes), usando magnitudes k=1..6 (invariante a transposição)."""
     if C.shape[0] != 12:
-        raise ValueError("Chroma must have 12 bands (12 x T).")
-    X = np.fft.rfft(C, n=12, axis=0)  # -> (7 x T), indices 0..6
+        raise ValueError("Chroma deve ter 12 bandas (12 x T).")
+    X = np.fft.rfft(C, n=12, axis=0)  # -> (7 x T), índices 0..6
     TIV = np.abs(X[1:7, :])           # k=1..6
     tiv6 = np.mean(TIV, axis=1)       # 6D
     return tiv6.astype(np.float32)
 
 def extrair_features_completas(y: np.ndarray, sr: int) -> np.ndarray:
-    # mono float32
+    """
+    Vetor final com:
+      - Normalização de loudness (LUFS -> RMS)
+      - HPSS
+      - Beat-synchronous (mediana por batida)
+      - MFCC + deltas (+2)
+      - Spectral contrast (mix)
+      - Chroma harmônico alinhado (invariante à tonalidade) + TIV-6
+      - Tonnetz (harmônico)
+      - Rítmicas percussivas (ZCR, centroid, bandwidth, rolloff)
+      - Tempo (mediana BPM) + variância
+    Validação pelo schema em app_v4/audio/feature_schema.json
+    """
     if y.ndim > 1:
         y = np.mean(y, axis=0)
     y = y.astype(np.float32, copy=False)
@@ -83,7 +102,7 @@ def extrair_features_completas(y: np.ndarray, sr: int) -> np.ndarray:
 
     chroma_h = librosa.feature.chroma_cqt(y=y_h, sr=sr, hop_length=HOP_LENGTH)
     chroma_h_sync = _beat_sync(chroma_h, beat_frames)               # 12 x Nb
-    chroma_ci, _ = _rotate_chroma_to_c(chroma_h_sync)               # align to C
+    chroma_ci, _ = _rotate_chroma_to_c(chroma_h_sync)               # alinhado em Dó
     chroma_ci_mean = chroma_ci.mean(axis=1)                         # 12D
 
     tonnetz_h = librosa.feature.tonnetz(y=y_h, sr=sr)
@@ -121,6 +140,6 @@ def extrair_features_completas(y: np.ndarray, sr: int) -> np.ndarray:
 
     vec, lens = stack_features(blocks)
     if not np.all(np.isfinite(vec)):
-        raise ValueError("NaN/Inf found in feature vector.")
+        raise ValueError("Encontrado NaN/Inf no vetor de features.")
     assert_against_schema(vec.size, lens)
     return vec.astype(np.float32)

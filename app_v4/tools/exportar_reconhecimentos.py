@@ -2,7 +2,7 @@
 import sqlite3, json
 from pathlib import Path
 
-def export_recognitions(db_path="musicas.db", out_path="recognitions.json"):
+def exportar_reconhecimentos(db_path="musicas.db", out_path="reconhecimentos.json"):
     con = sqlite3.connect(db_path)
     cur = con.cursor()
     cur.execute("SELECT file_hash, title, artist, album, isrc, source, confidence, raw_json, created_at FROM recognitions ORDER BY id DESC")
@@ -19,7 +19,7 @@ def export_recognitions(db_path="musicas.db", out_path="recognitions.json"):
             "source": source, "confidence": conf, "created_at": dt, **({"extra": extra} if extra else {})
         })
     Path(out_path).write_text(json.dumps(out, indent=2, ensure_ascii=False))
-    print(f"Saved {len(out)} recognitions to {out_path}")
+    print(f"Salvo {len(out)} reconhecimentos em {out_path}")
 
 if __name__ == "__main__":
-    export_recognitions()
+    exportar_reconhecimentos()

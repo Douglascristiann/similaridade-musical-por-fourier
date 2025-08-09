@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional
 
 AUDD_URL = "https://api.audd.io/"
-# Expected env var AUDD_API_TOKEN read in recognizer
 
 def audd_recognize_file(file_path: str, api_token: str, return_fields: str = "apple_music,spotify") -> Optional[dict]:
     if not api_token:

@@ -11,6 +11,7 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "feature_schema.json"
 class BlockSpec:
     name: str
 
+# Ordem dos blocos no vetor final
 FEATURE_ORDER = [
     BlockSpec("mfcc"),
     BlockSpec("mfcc_delta"),
@@ -31,7 +32,7 @@ def stack_features(blocks: dict[str, np.ndarray]) -> tuple[np.ndarray, dict[str,
     parts, lens = [], {}
     for spec in FEATURE_ORDER:
         if spec.name not in blocks:
-            raise KeyError(f"Missing feature block: {spec.name}. Got: {list(blocks.keys())}")
+            raise KeyError(f"Bloco de feature ausente: {spec.name}. Recebidos: {list(blocks.keys())}")
         a = np.asarray(blocks[spec.name]).ravel()
         lens[spec.name] = a.size
         parts.append(a)
@@ -58,11 +59,11 @@ def assert_against_schema(total_len: int, lens: dict[str, int], path: Path = SCH
     expected_order = schema["order"]
     current_order = [b.name for b in FEATURE_ORDER]
     if current_order != expected_order:
-        raise AssertionError(f"Feature block order changed.\nExpected: {expected_order}\nCurrent:  {current_order}")
+        raise AssertionError(f"Ordem dos blocos mudou.\nEsperado: {expected_order}\nAtual:   {current_order}")
     expected_lens = schema["lengths"]
     diffs = {k: (lens.get(k), expected_lens.get(k)) for k in expected_lens if lens.get(k) != expected_lens.get(k)}
     if diffs:
-        det = "\n".join([f"- {k}: current={v[0]} expected={v[1]}" for k, v in diffs.items()])
-        raise AssertionError(f"Block sizes diverged:\n{det}")
+        det = "\n".join([f"- {k}: atual={v[0]} esperado={v[1]}" for k, v in diffs.items()])
+        raise AssertionError(f"Tamanhos dos blocos divergiram:\n{det}")
     if total_len != int(schema["total"]):
-        raise AssertionError(f"Total length changed: current={total_len} expected={schema['total']}")
+        raise AssertionError(f"Tamanho total divergente: atual={total_len} esperado={schema['total']}")

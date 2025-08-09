@@ -14,7 +14,7 @@ def run(db_path="musicas.db"):
     cur = con.cursor()
     sel = f"SELECT {m['id']}, {m['features']} FROM {table}" if m['id'] else f"SELECT {m['features']} FROM {table}"
     cur.execute(sel)
-    problems = []
+    problemas = []
     for row in cur.fetchall():
         if m['id']:
             _id, s = row
@@ -22,14 +22,14 @@ def run(db_path="musicas.db"):
             _id, s = None, row[0]
         v = _parse(s)
         if EXPECTED_FEATURE_LENGTH is not None and v.size != EXPECTED_FEATURE_LENGTH:
-            problems.append((_id, v.size))
+            problemas.append((_id, v.size))
     con.close()
-    if problems:
-        print("⚠️ Vectors with unexpected size:")
-        for pid, sz in problems:
-            print(f" - id={pid} size={sz} (expected={EXPECTED_FEATURE_LENGTH})")
+    if problemas:
+        print("⚠️ Vetores com tamanho inesperado:")
+        for pid, sz in problemas:
+            print(f" - id={pid} size={sz} (esperado={EXPECTED_FEATURE_LENGTH})")
     else:
-        print("✅ All vectors have the expected size.")
+        print("✅ Todos os vetores têm o tamanho esperado.")
 
 if __name__ == "__main__":
     run()

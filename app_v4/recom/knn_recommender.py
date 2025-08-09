@@ -31,7 +31,7 @@ def recomendar_por_id(db_path: str | Path, song_id: int, k: int = 10) -> list[di
     Xs, ids, metas, scaler = preparar_base_escalada(db_path)
     id2idx = {i: j for j, i in enumerate(ids)}
     if song_id not in id2idx:
-        raise KeyError(f"id {song_id} not found in DB.")
+        raise KeyError(f"id {song_id} não encontrado no banco.")
     q = Xs[id2idx[song_id]]
     idx, sims = cosine_knn(Xs, q, k+1)
     out = []

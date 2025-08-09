@@ -4,10 +4,9 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from pathlib import Path
 import hashlib
-import os
 
 try:
-    from dotenv import load_dotenv  # optional
+    from dotenv import load_dotenv  # opcional
     load_dotenv()
 except Exception:
     pass
@@ -48,7 +47,7 @@ def _file_hash(path: str | Path, algo: str = "sha1", chunk: int = 1024 * 1024) -
             h.update(b)
     return h.hexdigest()
 
-def recognize_with_cache(db_path: str | Path, file_path: str | Path, use_cache: bool = True) -> RecognitionResult:
+def reconhecer_com_cache(db_path: str | Path, file_path: str | Path, use_cache: bool = True) -> RecognitionResult:
     ensure_schema(db_path)
     h = _file_hash(file_path)
     if use_cache:
@@ -64,7 +63,7 @@ def recognize_with_cache(db_path: str | Path, file_path: str | Path, use_cache: 
                 extras=cached,
             )
 
-    # Pipeline: Shazam (if enabled) -> AudD -> (optional) Discogs enrichment
+    # Pipeline: Shazam (se habilitado) -> AudD -> Discogs (enriquecimento)
     result = None
     if SHAZAM_ENABLE:
         result = shazam_recognize_file(str(file_path))
@@ -73,13 +72,11 @@ def recognize_with_cache(db_path: str | Path, file_path: str | Path, use_cache: 
     if not result:
         result = {"title": None, "artist": None, "album": None, "isrc": None, "source": None, "confidence": 0.0}
 
-    # Discogs enrichment (when we have artist/title)
     if result.get("artist") and result.get("title") and DISCOGS_TOKEN:
         info = discogs_search(result["artist"], result["title"], DISCOGS_TOKEN)
         if info:
             result.update({"discogs": info})
 
-    # Persist cache
     upsert_recognition(db_path, h, result)
     return RecognitionResult(
         title=result.get("title"),

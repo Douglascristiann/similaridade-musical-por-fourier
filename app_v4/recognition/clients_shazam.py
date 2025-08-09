@@ -15,10 +15,9 @@ async def _shazam_async_recognize(file_path: str) -> Optional[dict]:
         return None
     if not out:
         return None
-    # heuristic mapping
     track = out.get("track") or {}
     title = track.get("title")
-    subtitle = track.get("subtitle")  # artist
+    subtitle = track.get("subtitle")  # artista
     sections = track.get("sections") or []
     isrc = None
     for s in sections:
@@ -39,7 +38,6 @@ async def _shazam_async_recognize(file_path: str) -> Optional[dict]:
     }
 
 def shazam_recognize_file(file_path: str) -> Optional[dict]:
-    # bridge to sync
     try:
         import asyncio
     except Exception:
@@ -51,7 +49,6 @@ def shazam_recognize_file(file_path: str) -> Optional[dict]:
         asyncio.set_event_loop(loop)
     try:
         if loop.is_running():
-            # in running loop, create new loop policy
             new_loop = asyncio.new_event_loop()
             res = new_loop.run_until_complete(_shazam_async_recognize(file_path))
             new_loop.close()

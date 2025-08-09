@@ -17,7 +17,7 @@ def default_db_path() -> Path:
         return repo_root
     return Path(__file__).resolve().parents[1] / "musicas.db"
 
-# ---------------- Schema & detection ----------------
+# ---------------- Schema e detecção ----------------
 
 def ensure_schema(db_path: str | Path) -> None:
     p = Path(db_path)
@@ -43,7 +43,7 @@ def ensure_schema(db_path: str | Path) -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_musicas_artista ON musicas (artista)")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_musicas_caminho ON musicas (caminho)")
         con.commit()
-    # recognition cache
+    # cache de reconhecimento
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS recognitions (
@@ -68,7 +68,7 @@ def detect_table_and_cols(con: sqlite3.Connection) -> tuple[str, Dict[str, str]]
     cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = [r[0] for r in cur.fetchall()]
     if not tables:
-        raise RuntimeError("No tables found. Run 'ingest' to create/populate the DB.")
+        raise RuntimeError("Nenhuma tabela encontrada. Rode 'indexar' para criar/popular o banco.")
     candidates = [t for t in tables if any(x in t.lower() for x in ("musica", "song", "track"))]
     table = candidates[0] if candidates else tables[0]
 
@@ -91,10 +91,10 @@ def detect_table_and_cols(con: sqlite3.Connection) -> tuple[str, Dict[str, str]]
         "created_at":pick("created_at", "data", "dt"),
     }
     if mapping["features"] is None:
-        raise RuntimeError(f"Feature column not found in table '{table}'. Columns: {cols}")
+        raise RuntimeError(f"Coluna de features não localizada na tabela '{table}'. Colunas: {cols}")
     return table, mapping
 
-# ---------------- Conversions ----------------
+# ---------------- Conversões ----------------
 
 def vec_to_str(vec: np.ndarray) -> str:
     v = np.asarray(vec).ravel().astype(float)
@@ -103,7 +103,7 @@ def vec_to_str(vec: np.ndarray) -> str:
 def str_to_vec(s: str) -> np.ndarray:
     return np.fromstring(s, sep=',')
 
-# ---------------- Music operations ----------------
+# ---------------- Operações de música ----------------
 
 def musica_existe(con: sqlite3.Connection, table: str, mapping: Dict[str, str],
                   titulo: Optional[str], artista: Optional[str], caminho: Optional[str]) -> Optional[int]:
@@ -182,7 +182,7 @@ def load_feature_matrix(db_path: str | Path) -> tuple[np.ndarray, List[int], Lis
         ids.append(meta.get("id", len(ids)))
     con.close()
     if not rows:
-        raise RuntimeError("Empty database. Ingest some tracks first.")
+        raise RuntimeError("Banco vazio. Indexe algumas faixas primeiro.")
     X = np.vstack(rows).astype(np.float32)
     return X, ids, metas
 
@@ -202,7 +202,7 @@ def list_tracks(db_path: str | Path, limit: int = 20) -> List[Dict[str, str]]:
     con.close()
     return out
 
-# ---------------- Recognition cache ----------------
+# ---------------- Cache de reconhecimento ----------------
 
 def upsert_recognition(db_path: str | Path, file_hash: str, payload: dict) -> None:
     ensure_schema(db_path)
@@ -211,7 +211,6 @@ def upsert_recognition(db_path: str | Path, file_hash: str, payload: dict) -> No
     raw_json = json.dumps(payload, ensure_ascii=False)
     cur.execute("SELECT id FROM recognitions WHERE file_hash = ?", (file_hash,))
     r = cur.fetchone()
-    cols = ("file_hash","title","artist","album","isrc","source","confidence","raw_json")
     values = (
         file_hash,
         payload.get("title"),
@@ -229,7 +228,7 @@ def upsert_recognition(db_path: str | Path, file_hash: str, payload: dict) -> No
         )
     else:
         cur.execute(
-            f"INSERT INTO recognitions ({', '.join(cols)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO recognitions (file_hash, title, artist, album, isrc, source, confidence, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             values,
         )
     con.commit()

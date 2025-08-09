@@ -6,13 +6,12 @@ import sys
 import traceback
 import time
 import json
-import os
 
 import numpy as np
 import librosa
 
 try:
-    from dotenv import load_dotenv  # optional
+    from dotenv import load_dotenv  # opcional
     load_dotenv()
 except Exception:
     pass
@@ -25,7 +24,7 @@ from .storage.db_utils import (
 from .recom.knn_recommender import (
     recomendar_por_id, recomendar_por_audio, preparar_base_escalada
 )
-from .recognition.recognizer import recognize_with_cache
+from .recognition.recognizer import reconhecer_com_cache
 
 BANNER = r"""
    ______                     _            __  ___      __      __     
@@ -36,242 +35,242 @@ BANNER = r"""
                       /____/          Similaridade musical por Fourier
 """
 
-def _print_header():
+def _cabecalho():
     print(BANNER)
     print(f"{APP_NAME} v{APP_VERSION}")
     print("-" * 72)
 
-def _format_table(rows: list[dict], columns: list[str]) -> str:
-    widths = [len(c) for c in columns]
+def _tabela(rows: list[dict], columns: list[str]) -> str:
+    larguras = [len(c) for c in columns]
     srows = []
     for r in rows:
         line = []
         for i, c in enumerate(columns):
             v = r.get(c, "")
             v = "" if v is None else str(v)
-            widths[i] = max(widths[i], len(v))
+            larguras[i] = max(larguras[i], len(v))
             line.append(v)
         srows.append(line)
-    sep = "+".join("-" * (w + 2) for w in widths)
+    sep = "+".join("-" * (w + 2) for w in larguras)
     out = []
-    header = " | ".join(c.ljust(w) for c, w in zip(columns, widths))
+    header = " | ".join(c.ljust(w) for c, w in zip(columns, larguras))
     out.append(header)
     out.append(sep)
     for line in srows:
-        out.append(" | ".join(v.ljust(w) for v, w in zip(line, widths)))
+        out.append(" | ".join(v.ljust(w) for v, w in zip(line, larguras)))
     return "\n".join(out)
 
-def _discover_audio_paths(path: Path, recursive: bool) -> list[Path]:
+def _coletar_arquivos(path: Path, recursivo: bool) -> list[Path]:
     if path.is_file():
         return [path] if path.suffix.lower() in AUDIO_EXTS else []
-    pattern = "**/*" if recursive else "*"
-    return [p for p in path.glob(pattern) if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
+    padrao = "**/*" if recursivo else "*"
+    return [p for p in path.glob(padrao) if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
 
-# --------------- Subcommands ---------------
+# --------------- Subcomandos ---------------
 
-def cmd_ingest(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_indexar(args: argparse.Namespace) -> int:
+    _cabecalho()
     db = Path(args.db) if args.db else default_db_path()
     ensure_schema(db)
 
-    paths: list[Path] = []
+    caminhos: list[Path] = []
     for p in args.path:
         P = Path(p)
         if not P.exists():
-            print(f"⚠️  Ignoring: {p} (not found)")
+            print(f"⚠️  Ignorando: {p} (não encontrado)")
             continue
-        paths.extend(_discover_audio_paths(P, args.recursive))
+        caminhos.extend(_coletar_arquivos(P, args.recursivo))
 
-    if not paths:
-        print("No valid audio files found.")
+    if not caminhos:
+        print("Nenhum arquivo de áudio válido encontrado.")
         return 1
 
-    print(f"Database: {db}")
-    print(f"Files to process: {len(paths)}\n")
+    print(f"Banco de dados: {db}")
+    print(f"Arquivos a processar: {len(caminhos)}\n")
 
-    ok, fail = 0, 0
-    for i, ap in enumerate(paths, 1):
+    ok, falha = 0, 0
+    for i, ap in enumerate(caminhos, 1):
         t0 = time.time()
         try:
             y, sr = librosa.load(str(ap), sr=args.sr, mono=True)
             vec = extrair_features_completas(y, sr)
 
-            # Recognition (optional enrichment)
+            # Reconhecimento (opcional)
             titulo = ap.stem
             artista = "desconhecido"
-            if args.enrich:
-                rec = recognize_with_cache(db, ap, use_cache=True)
+            if args.enriquecer:
+                rec = reconhecer_com_cache(db, ap, use_cache=True)
                 if rec.title:  titulo = rec.title
                 if rec.artist: artista = rec.artist
 
             new_id = insert_track(db, titulo=titulo, artista=artista, caminho=str(ap.resolve()), vec=vec, upsert=True)
             dt = time.time() - t0
-            print(f"[{i}/{len(paths)}] ✅ id={new_id} {ap.name} ({dt:.2f}s)  ->  {titulo} — {artista}")
+            print(f"[{i}/{len(caminhos)}] ✅ id={new_id} {ap.name} ({dt:.2f}s)  ->  {titulo} — {artista}")
             ok += 1
         except Exception as e:
-            fail += 1
-            print(f"[{i}/{len(paths)}] ❌ {ap.name} -> {e}")
+            falha += 1
+            print(f"[{i}/{len(caminhos)}] ❌ {ap.name} -> {e}")
             if args.verbose:
                 traceback.print_exc()
-    print(f"\nDone. Success: {ok}  |  Failures: {fail}")
-    return 0 if ok > 0 and fail == 0 else (0 if ok > 0 else 1)
+    print(f"\nConcluído. Sucesso: {ok}  |  Falhas: {falha}")
+    return 0 if ok > 0 and falha == 0 else (0 if ok > 0 else 1)
 
-def cmd_recommend_id(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_recomendar_id(args: argparse.Namespace) -> int:
+    _cabecalho()
     db = Path(args.db) if args.db else default_db_path()
     res = recomendar_por_id(db, song_id=args.id, k=args.k)
     if not res:
-        print("No recommendations found.")
+        print("Nenhuma recomendação encontrada.")
         return 0
     cols = ["id", "titulo", "artista", "caminho", "similaridade"]
-    print(_format_table(res, [c for c in cols if c in res[0]]))
+    print(_tabela(res, [c for c in cols if c in res[0]]))
     if args.json:
         print("\nJSON:")
         print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0
 
-def cmd_recommend_file(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_recomendar_arquivo(args: argparse.Namespace) -> int:
+    _cabecalho()
     db = Path(args.db) if args.db else default_db_path()
-    res = recomendar_por_audio(db, audio_path=args.file, k=args.k, sr=args.sr)
+    res = recomendar_por_audio(db, audio_path=args.arquivo, k=args.k, sr=args.sr)
     if not res:
-        print("No recommendations found.")
+        print("Nenhuma recomendação encontrada.")
         return 0
     cols = ["id", "titulo", "artista", "caminho", "similaridade"]
-    print(_format_table(res, [c for c in cols if c in res[0]]))
+    print(_tabela(res, [c for c in cols if c in res[0]]))
     if args.json:
         print("\nJSON:")
         print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0
 
-def cmd_recognize(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_reconhecer(args: argparse.Namespace) -> int:
+    _cabecalho()
     db = Path(args.db) if args.db else default_db_path()
-    P = Path(args.path)
-    paths = []
+    P = Path(args.caminho)
+    caminhos = []
     if P.is_dir():
-        paths = _discover_audio_paths(P, recursive=True)
+        caminhos = _coletar_arquivos(P, recursivo=True)
     elif P.is_file():
-        paths = [P]
+        caminhos = [P]
     else:
-        print(f"Path not found: {P}")
+        print(f"Caminho não encontrado: {P}")
         return 1
 
-    if not paths:
-        print("No valid audio found.")
+    if not caminhos:
+        print("Nenhum áudio válido encontrado.")
         return 1
 
-    out_rows = []
-    for i, ap in enumerate(paths, 1):
-        rec = recognize_with_cache(db, ap, use_cache=True)
-        row = {"file": str(ap), **rec.to_dict()}
-        out_rows.append(row)
-        print(f"[{i}/{len(paths)}] {ap.name} -> {row.get('title')} — {row.get('artist')} ({row.get('source') or '-'})")
+    saida = []
+    for i, ap in enumerate(caminhos, 1):
+        rec = reconhecer_com_cache(db, ap, use_cache=True)
+        row = {"arquivo": str(ap), **rec.to_dict()}
+        saida.append(row)
+        print(f"[{i}/{len(caminhos)}] {ap.name} -> {row.get('title')} — {row.get('artist')} ({row.get('source') or '-'})")
 
     if args.json:
         print("\nJSON:")
-        print(json.dumps(out_rows, ensure_ascii=False, indent=2))
+        print(json.dumps(saida, ensure_ascii=False, indent=2))
     return 0
 
-def cmd_scaler_rebuild(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_reajustar_scaler(args: argparse.Namespace) -> int:
+    _cabecalho()
     db = Path(args.db) if args.db else default_db_path()
-    print(f"Rebuilding per-block scaler from DB: {db}")
+    print(f"Reajustando scaler por bloco a partir do banco: {db}")
     from .recom.knn_recommender import preparar_base_escalada
     Xs, ids, metas, scaler = preparar_base_escalada(db)
-    print(f"✅ Scaler trained and saved. Scaled matrix: {Xs.shape[0]} tracks x {Xs.shape[1]} dims.")
+    print(f"✅ Scaler treinado e salvo. Matriz escalada: {Xs.shape[0]} músicas x {Xs.shape[1]} dims.")
     return 0
 
-def cmd_db_list(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_banco_listar(args: argparse.Namespace) -> int:
+    _cabecalho()
     db = Path(args.db) if args.db else default_db_path()
-    rows = list_tracks(db, limit=args.limit)
+    rows = list_tracks(db, limit=args.limite)
     if not rows:
-        print("Empty DB.")
+        print("Banco vazio.")
         return 0
     cols = []
     for c in ("id", "titulo", "artista", "caminho", "created_at"):
         if c in rows[0]:
             cols.append(c)
-    print(_format_table(rows, cols))
+    print(_tabela(rows, cols))
     return 0
 
-def cmd_about(args: argparse.Namespace) -> int:
-    _print_header()
+def cmd_sobre(args: argparse.Namespace) -> int:
+    _cabecalho()
     print(f"{APP_NAME} v{APP_VERSION}")
-    print("Fourier-friendly music similarity engine + recognition pipeline:")
-    print(" - Loudness normalization (LUFS/RMS)")
-    print(" - HPSS (harmonic vs percussive) + beat-synchronous features")
-    print(" - MFCC(+Δ,+Δ²), Spectral Contrast, key-invariant chroma + TIV-6, Tonnetz")
-    print(" - Rhythmic/spectral (ZCR, centroid, bandwidth, rolloff) + tempo/variance")
-    print(" - Recognition: Shazam (optional), AudD, Discogs enrichment + SQLite cache")
+    print("Engine de similaridade musical + pipeline de reconhecimento:")
+    print(" - Normalização de loudness (LUFS/RMS)")
+    print(" - HPSS (harmônico x percussivo) + features sincronizadas ao pulso")
+    print(" - MFCC(+Δ,+Δ²), Spectral Contrast, chroma alinhado + TIV-6, Tonnetz")
+    print(" - Rítmicas/espectrais (ZCR, centroid, bandwidth, rolloff) + tempo/variância")
+    print(" - Reconhecimento: Shazam (opcional), AudD, Discogs + cache em SQLite")
     return 0
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog=APP_NAME, description=f"{APP_NAME} — Fourier-based music similarity")
+    p = argparse.ArgumentParser(prog=APP_NAME, description=f"{APP_NAME} — Similaridade musical baseada em Fourier")
     sub = p.add_subparsers(dest="cmd")
 
-    # ingest
-    pi = sub.add_parser("ingest", help="Index audio files into the DB (extract features).")
-    pi.add_argument("path", nargs="+", help="File(s) or folder(s).")
-    pi.add_argument("--recursive", "-r", action="store_true", help="Search recursively.")
-    pi.add_argument("--enrich", action="store_true", help="Try to recognize metadata (Shazam/AudD/Discogs).")
-    pi.add_argument("--sr", type=int, default=22050, help="Sample rate for reading (default: 22050).")
-    pi.add_argument("--db", type=str, default=None, help="SQLite DB path (default: autodetect).")
-    pi.add_argument("--verbose", "-v", action="store_true", help="Verbose errors (stacktrace).")
-    pi.set_defaults(func=cmd_ingest)
+    # indexar (alias: ingest)
+    pi = sub.add_parser("indexar", help="Indexa arquivos de áudio no banco (extrai features).", aliases=["ingest"])
+    pi.add_argument("path", nargs="+", help="Arquivo(s) ou pasta(s).")
+    pi.add_argument("--recursivo", "-r", action="store_true", help="Buscar recursivamente em subpastas.")
+    pi.add_argument("--enriquecer", action="store_true", help="Tentar reconhecer metadados (Shazam/AudD/Discogs).")
+    pi.add_argument("--sr", type=int, default=22050, help="Sample rate para leitura (padrão: 22050).")
+    pi.add_argument("--db", type=str, default=None, help="Caminho do banco SQLite (padrão: autodetect).")
+    pi.add_argument("--verbose", "-v", action="store_true", help="Erros detalhados (stacktrace).")
+    pi.set_defaults(func=cmd_indexar)
 
-    # recognize
-    prec = sub.add_parser("recognize", help="Recognize metadata for a file or folder (with cache).")
-    prec.add_argument("path", help="Audio file or folder.")
-    prec.add_argument("--db", type=str, default=None, help="SQLite DB path.")
-    prec.add_argument("--json", action="store_true", help="Print JSON output.")
-    prec.set_defaults(func=cmd_recognize)
+    # reconhecer (alias: recognize)
+    prec = sub.add_parser("reconhecer", help="Reconhece metadados (com cache) para arquivo ou pasta.", aliases=["recognize"])
+    prec.add_argument("caminho", help="Arquivo de áudio ou pasta.")
+    prec.add_argument("--db", type=str, default=None, help="Caminho do banco SQLite.")
+    prec.add_argument("--json", action="store_true", help="Imprimir JSON.")
+    prec.set_defaults(func=cmd_reconhecer)
 
-    # recommend id
-    pr = sub.add_parser("recommend-id", help="Recommend similar tracks by DB id.")
-    pr.add_argument("id", type=int, help="Track id in DB.")
-    pr.add_argument("--k", type=int, default=10, help="Number of neighbors returned.")
-    pr.add_argument("--db", type=str, default=None, help="SQLite DB path.")
-    pr.add_argument("--json", action="store_true", help="Print JSON.")
-    pr.set_defaults(func=cmd_recommend_id)
+    # recomendar-id (alias: recommend-id)
+    pr = sub.add_parser("recomendar-id", help="Recomenda similares pelo id no banco.", aliases=["recommend-id"])
+    pr.add_argument("id", type=int, help="ID da música no banco.")
+    pr.add_argument("--k", type=int, default=10, help="Número de vizinhos retornados.")
+    pr.add_argument("--db", type=str, default=None, help="Caminho do banco SQLite.")
+    pr.add_argument("--json", action="store_true", help="Imprimir JSON.")
+    pr.set_defaults(func=cmd_recomendar_id)
 
-    # recommend file
-    prf = sub.add_parser("recommend-file", help="Recommend similar tracks by audio file.")
-    prf.add_argument("file", type=str, help="Audio file path.")
-    prf.add_argument("--k", type=int, default=10, help="Number of neighbors returned.")
-    prf.add_argument("--sr", type=int, default=22050, help="Reading sample rate.")
-    prf.add_argument("--db", type=str, default=None, help="SQLite DB path.")
-    prf.add_argument("--json", action="store_true", help="Print JSON.")
-    prf.set_defaults(func=cmd_recommend_file)
+    # recomendar-arquivo (alias: recommend-file)
+    prf = sub.add_parser("recomendar-arquivo", help="Recomenda similares por um arquivo de áudio.", aliases=["recommend-file"])
+    prf.add_argument("arquivo", type=str, help="Caminho do arquivo de áudio.")
+    prf.add_argument("--k", type=int, default=10, help="Número de vizinhos retornados.")
+    prf.add_argument("--sr", type=int, default=22050, help="Sample rate de leitura.")
+    prf.add_argument("--db", type=str, default=None, help="Caminho do banco SQLite.")
+    prf.add_argument("--json", action="store_true", help="Imprimir JSON.")
+    prf.set_defaults(func=cmd_recomendar_arquivo)
 
-    # scaler
-    ps = sub.add_parser("scaler", help="Per-block scaler ops.")
+    # normalizador (alias: scaler)
+    ps = sub.add_parser("normalizador", help="Operações com o scaler por bloco.", aliases=["scaler"])
     ps_sub = ps.add_subparsers(dest="subcmd")
-    psr = ps_sub.add_parser("rebuild", help="Refit scaler from current DB.")
-    psr.add_argument("--db", type=str, default=None, help="SQLite DB path.")
-    psr.set_defaults(func=cmd_scaler_rebuild)
+    psr = ps_sub.add_parser("reajustar", help="Refaz o ajuste do scaler a partir do banco atual.", aliases=["rebuild"])
+    psr.add_argument("--db", type=str, default=None, help="Caminho do banco SQLite.")
+    psr.set_defaults(func=cmd_reajustar_scaler)
 
-    # db
-    pdb = sub.add_parser("db", help="DB operations.")
+    # banco (alias: db)
+    pdb = sub.add_parser("banco", help="Operações de banco de dados.", aliases=["db"])
     pdb_sub = pdb.add_subparsers(dest="subcmd")
-    pdbl = pdb_sub.add_parser("list", help="List latest tracks.")
-    pdbl.add_argument("--limit", type=int, default=20, help="Rows to show (default: 20).")
-    pdbl.add_argument("--db", type=str, default=None, help="SQLite DB path.")
-    pdbl.set_defaults(func=cmd_db_list)
+    pdbl = pdb_sub.add_parser("listar", help="Lista as últimas faixas inseridas.", aliases=["list"])
+    pdbl.add_argument("--limite", type=int, default=20, help="Número de linhas (padrão: 20).")
+    pdbl.add_argument("--db", type=str, default=None, help="Caminho do banco SQLite.")
+    pdbl.set_defaults(func=cmd_banco_listar)
 
-    # about
-    pa = sub.add_parser("about", help="About the product.")
-    pa.set_defaults(func=cmd_about)
+    # sobre (alias: about)
+    pa = sub.add_parser("sobre", help="Sobre o produto.", aliases=["about"])
+    pa.set_defaults(func=cmd_sobre)
 
     return p
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        _print_header()
-        print("Use one of: ingest | recognize | recommend-id | recommend-file | scaler rebuild | db list | about")
-        print(f"Ex.: python -m app_v4.main ingest ./my_music -r --enrich")
+        _cabecalho()
+        print("Use um dos comandos: indexar | reconhecer | recomendar-id | recomendar-arquivo | normalizador reajustar | banco listar | sobre")
+        print(f"Ex.: python -m app_v4.main indexar ./minhas_musicas -r --enriquecer")
         return 0
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -281,10 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        print("\nInterrompido pelo usuário.")
         return 130
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Erro: {e}")
         return 1
 
 if __name__ == "__main__":
