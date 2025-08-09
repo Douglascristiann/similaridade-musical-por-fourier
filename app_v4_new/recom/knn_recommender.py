@@ -1,97 +1,107 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-from pathlib import Path
+from typing import List, Dict, Any, Tuple
 import numpy as np
-import librosa
+from pathlib import Path
 
-from .block_scaler import load_or_fit_scaler
-from ..audio.extrator_fft import extrair_features_completas
-from ..database.db import carregar_matriz
-from app_v4_new.config import BLOCK_WEIGHTS, BLOCK_SCALER_PATH
-from ..audio.feature_schema import load_schema, SCHEMA_PATH
+from app_v4_new.config import BLOCK_SCALER_PATH, BLOCK_WEIGHTS
+from app_v4_new.database.db import carregar_matriz
+from app_v4_new.audio.extrator_fft import extrair_features_completas, get_feature_blocks
 
-_MIN_N_FOR_SCALER = 12  # abaixo disso, usar L2 por bloco (mais estável com base pequena)
+def _fit_block_scaler(X: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
+    blocks = get_feature_blocks()
+    scaler = {}
+    for name, sl in blocks.items():
+        sub = X[:, sl]
+        mu = np.nanmean(sub, axis=0)
+        sd = np.nanstd(sub, axis=0)
+        sd[sd == 0.0] = 1.0
+        scaler[name] = {"mean": mu, "std": sd}
+    return scaler
 
-def _schema_slices() -> tuple[list[str], dict[str, slice]]:
-    sch = load_schema(SCHEMA_PATH)
-    order = list(sch["order"])
-    lengths = {k: int(v) for k, v in sch["lengths"].items()}
-    sls = {}
-    start = 0
-    for name in order:
-        L = lengths[name]
-        sls[name] = slice(start, start + L)
-        start += L
-    return order, sls
+def _apply_block_scaler(X: np.ndarray, scaler: Dict[str, Dict[str, np.ndarray]]) -> np.ndarray:
+    Xs = X.copy()
+    blocks = get_feature_blocks()
+    for name, sl in blocks.items():
+        if name not in scaler: 
+            continue
+        mu = scaler[name]["mean"]; sd = scaler[name]["std"]
+        Xs[:, sl] = (Xs[:, sl] - mu) / sd
+        # peso por bloco
+        w = float(BLOCK_WEIGHTS.get(name, 1.0))
+        Xs[:, sl] *= w
+    return Xs
 
-def _blockwise_l2(X: np.ndarray, weights: dict[str, float]) -> np.ndarray:
-    order, sls = _schema_slices()
-    Xn = X.copy().astype(np.float32, copy=False)
-    for name in order:
-        sl = sls[name]
-        B = Xn[:, sl]
-        nrm = np.linalg.norm(B, axis=1, keepdims=True) + 1e-12
-        B /= nrm
-        if name in weights:
-            B *= float(weights[name])
-        Xn[:, sl] = B
-    return Xn
+def _save_scaler(scaler: Dict[str, Dict[str, np.ndarray]]):
+    BLOCK_SCALER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        BLOCK_SCALER_PATH,
+        **{f"{k}_mean": v["mean"] for k, v in scaler.items()},
+        **{f"{k}_std":  v["std"]  for k, v in scaler.items()},
+    )
 
-def _blockwise_l2_vec(x: np.ndarray, weights: dict[str, float]) -> np.ndarray:
-    order, sls = _schema_slices()
-    xn = x.copy().astype(np.float32, copy=False)
-    for name in order:
-        sl = sls[name]
-        b = xn[sl]
-        nrm = (np.linalg.norm(b) + 1e-12)
-        b = b / nrm
-        if name in weights:
-            b = b * float(weights[name])
-        xn[sl] = b
-    return xn
+def _load_scaler() -> Dict[str, Dict[str, np.ndarray]] | None:
+    if not Path(BLOCK_SCALER_PATH).exists():
+        return None
+    data = np.load(BLOCK_SCALER_PATH, allow_pickle=False)
+    scaler = {}
+    for name in get_feature_blocks().keys():
+        mkey, skey = f"{name}_mean", f"{name}_std"
+        if mkey in data and skey in data:
+            scaler[name] = {"mean": data[mkey], "std": data[skey]}
+    return scaler
 
-def cosine_knn(Xs: np.ndarray, q: np.ndarray, k: int = 10) -> tuple[np.ndarray, np.ndarray]:
-    Xn = Xs / (np.linalg.norm(Xs, axis=1, keepdims=True) + 1e-12)
-    qn = q / (np.linalg.norm(q) + 1e-12)
-    sims = Xn @ qn
-    k = min(k, len(sims))
-    idx = np.argpartition(-sims, k-1)[:k]
-    idx = idx[np.argsort(-sims[idx])]
-    return idx, sims[idx]
-
-def preparar_base_escalada():
+def preparar_base_escalada() -> Tuple[np.ndarray, List[int], List[Dict[str,Any]], Dict]:
     X, ids, metas = carregar_matriz()
-    if X.shape[0] < _MIN_N_FOR_SCALER:
-        # Base pequena: L2 por bloco + pesos
-        Xs = _blockwise_l2(X, BLOCK_WEIGHTS)
-        scaler = None
-        return Xs, ids, metas, scaler
-    # Base razoável: z-score por bloco + pesos
-    scaler = load_or_fit_scaler(X, save_path=BLOCK_SCALER_PATH)
-    Xs = scaler.transform_matrix(X, weights=BLOCK_WEIGHTS).astype(np.float32)
+    if X.shape[0] == 0:
+        return X, ids, metas, {}
+    scaler = _load_scaler()
+    if scaler is None:
+        scaler = _fit_block_scaler(X)
+        _save_scaler(scaler)
+    Xs = _apply_block_scaler(X, scaler)
     return Xs, ids, metas, scaler
 
-def recomendar_por_audio(audio_path: str | Path, k: int = 3, sr: int = 22050, excluir_nome: str | None = None):
+def _cosine_sim_matrix(A: np.ndarray, b: np.ndarray) -> np.ndarray:
+    # normaliza
+    A_norm = np.linalg.norm(A, axis=1, keepdims=True) + 1e-9
+    b_norm = np.linalg.norm(b) + 1e-9
+    sims = (A @ b) / (A_norm[:, 0] * b_norm)
+    return sims
+
+def recomendar_por_audio(path_audio, k: int = 3, sr: int = 22050, excluir_nome: str | None = None) -> List[Dict[str, Any]]:
+    import librosa, numpy as np
     Xs, ids, metas, scaler = preparar_base_escalada()
-    y, _sr = librosa.load(str(audio_path), sr=sr, mono=True)
-    q_raw = extrair_features_completas(y, _sr)
-    if scaler is None:
-        q = _blockwise_l2_vec(q_raw, BLOCK_WEIGHTS)
-    else:
-        q = scaler.transform_vector(q_raw, weights=BLOCK_WEIGHTS).astype(np.float32)
-    idx, sims = cosine_knn(Xs, q, k + 5)
+    if Xs.shape[0] == 0:
+        return []
+    y, _sr = librosa.load(str(path_audio), sr=sr, mono=True)
+    q = extrair_features_completas(y, _sr).reshape(1, -1)
 
-    out = []
-    for j, s in zip(idx, sims):
-        meta = dict(metas[j])
-        if excluir_nome and excluir_nome == meta.get("nome"):
+    # aplica scaler+pesos no vetor de consulta
+    if scaler:
+        blocks = get_feature_blocks()
+        for name, sl in blocks.items():
+            if name in scaler:
+                mu = scaler[name]["mean"]; sd = scaler[name]["std"]
+                q[:, sl] = (q[:, sl] - mu) / sd
+                w = float(BLOCK_WEIGHTS.get(name, 1.0))
+                q[:, sl] *= w
+
+    sims = _cosine_sim_matrix(Xs, q[0])
+    order = np.argsort(-sims)
+
+    recs = []
+    for idx in order:
+        meta = metas[idx]
+        if excluir_nome and meta.get("nome") == excluir_nome:
             continue
-        meta["similaridade"] = float(s)
-        out.append(meta)
-        if len(out) == k:
+        recs.append({
+            "id": ids[idx],
+            "titulo": meta.get("titulo"),
+            "artista": meta.get("artista"),
+            "caminho": meta.get("caminho"),
+            "similaridade": float(sims[idx]),
+        })
+        if len(recs) >= k:
             break
-    return out
-
-def formatar_percentual(sim: float) -> str:
-    """Converte similaridade [-1..1] em string de percentual, ex: 0.87 -> '87.0%'."""
-    pct = max(-1.0, min(1.0, float(sim))) * 100.0
-    return f"{pct:.1f}%"
+    return recs

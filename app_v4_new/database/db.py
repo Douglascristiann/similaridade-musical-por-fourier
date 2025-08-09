@@ -1,141 +1,115 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, sys
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional
 import mysql.connector
+from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 
-# --- achar config.py na RAIZ do projeto ---
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-
-from config import DB_CONFIG, EXPECTED_FEATURE_LENGTH  # usa seu config.py
-
-# Nova tabela em português (pode mudar por env se quiser)
-DB_TABELA_NOVA = os.getenv("DB_TABELA_NOVA", "tb_musicas_fourier")
-
+from app_v4_new.config import DB_CONFIG, DB_TABLE_NAME
 
 def conectar():
-    print(f"[DB] Conectando ao banco {DB_CONFIG.get('host')}:{DB_CONFIG.get('port')}/{DB_CONFIG.get('database')}…")
     return mysql.connector.connect(**DB_CONFIG)
 
 def criar_tabela():
-    print(f"[DB] Criando/verificando tabela {DB_TABELA_NOVA}…")
     with conectar() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {DB_TABELA_NOVA} (
+                CREATE TABLE IF NOT EXISTS {DB_TABLE_NAME} (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     nome VARCHAR(255) NOT NULL,
-                    caracteristicas TEXT NOT NULL,
+                    caracteristicas LONGTEXT NOT NULL,
                     artista VARCHAR(255),
                     titulo VARCHAR(255),
                     album VARCHAR(255),
                     genero VARCHAR(255),
                     capa_album TEXT,
-                    link_youtube TEXT,
-                    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE KEY uk_nome (nome)
-                );
+                    link_youtube TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
         conn.commit()
-    print(f"[DB] Tabela {DB_TABELA_NOVA} pronta.")
 
-def _pad_or_trim(vec: np.ndarray, expected: int) -> np.ndarray:
-    v = np.asarray(vec).ravel().astype(float)
-    if expected and expected > 0:
-        if v.size == expected:
-            return v
-        if v.size > expected:
-            return v[:expected]
-        out = np.zeros(expected, dtype=float)
-        out[:v.size] = v
-        return out
-    return v
-
-def musica_existe(nome: str) -> bool:
+def _select_id_by_nome(nome: str) -> Optional[int]:
     with conectar() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT 1 FROM {DB_TABELA_NOVA} WHERE nome = %s", (nome,))
-            return cur.fetchone() is not None
+            cur.execute(f"SELECT id FROM {DB_TABLE_NAME} WHERE nome=%s LIMIT 1", (nome,))
+            r = cur.fetchone()
+            return int(r[0]) if r else None
 
-def upsert_musica(nome: str, caracteristicas: np.ndarray, artista: Optional[str], titulo: Optional[str],
-                  album: Optional[str] = None, genero: Optional[str] = None, capa_album: Optional[str] = None,
-                  link_youtube: Optional[str] = None) -> int:
-    v = _pad_or_trim(caracteristicas, int(EXPECTED_FEATURE_LENGTH or 0))
-    carac_str = ",".join(f"{x:.9g}" for x in v)
+def upsert_musica(
+    nome: str,
+    caracteristicas: np.ndarray,
+    artista: Optional[str],
+    titulo: Optional[str],
+    album: Optional[str],
+    genero: Optional[str],
+    capa_album: Optional[str],
+    link_youtube: Optional[str],
+) -> int:
+    vec_str = ",".join(str(float(x)) for x in caracteristicas.tolist())
     with conectar() as conn:
         with conn.cursor() as cur:
-            if musica_existe(nome):
-                cur.execute(
-                    f"""UPDATE {DB_TABELA_NOVA}
-                           SET caracteristicas=%s, artista=%s, titulo=%s, album=%s, genero=%s, capa_album=%s, link_youtube=%s
-                         WHERE nome=%s""",
-                    (carac_str, artista, titulo, album, genero, capa_album, link_youtube, nome)
-                )
-                conn.commit()
-                cur.execute(f"SELECT id FROM {DB_TABELA_NOVA} WHERE nome=%s", (nome,))
-                rid = cur.fetchone()[0]
-                return int(rid)
-            else:
-                cur.execute(
-                    f"""INSERT INTO {DB_TABELA_NOVA}
-                           (nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (nome, carac_str, artista, titulo, album, genero, capa_album, link_youtube)
-                )
-                conn.commit()
-                return int(cur.lastrowid)
-
-def carregar_matriz() -> tuple[np.ndarray, list[int], list[dict]]:
-    with conectar() as conn:
-        with conn.cursor() as cur:
-            expected = int(EXPECTED_FEATURE_LENGTH or 0)
-            if expected > 0:
+            rid = _select_id_by_nome(nome)
+            if rid is None:
                 cur.execute(f"""
-                    SELECT id, nome, artista, titulo, link_youtube, caracteristicas
-                    FROM {DB_TABELA_NOVA}
-                    WHERE (LENGTH(caracteristicas) - LENGTH(REPLACE(caracteristicas, ',', ''))) + 1 = %s
-                """, (expected,))
+                    INSERT INTO {DB_TABLE_NAME}
+                    (nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (nome, vec_str, artista, titulo, album, genero, capa_album, link_youtube))
+                conn.commit()
+                rid = cur.lastrowid
             else:
                 cur.execute(f"""
-                    SELECT id, nome, artista, titulo, link_youtube, caracteristicas
-                    FROM {DB_TABELA_NOVA}
-                """)
-            rows = cur.fetchall()
-    if not rows:
-        raise RuntimeError("Banco vazio (tabela nova). Ingerir algumas músicas primeiro.")
-    X, ids, metas = [], [], []
-    for rid, nome, artista, titulo, link, carac in rows:
-        vec = np.fromstring(carac, sep=',', dtype=float)
-        vec = _pad_or_trim(vec, int(EXPECTED_FEATURE_LENGTH or 0))
-        X.append(vec.astype(np.float32))
-        ids.append(int(rid))
-        metas.append({
-            "id": int(rid),
-            "titulo": titulo or nome,
-            "artista": artista or "",
-            "caminho": link or nome,
-            "nome": nome,
-        })
-    return np.vstack(X), ids, metas
+                    UPDATE {DB_TABLE_NAME}
+                       SET caracteristicas=%s, artista=%s, titulo=%s, album=%s,
+                           genero=%s, capa_album=%s, link_youtube=%s
+                     WHERE id=%s
+                """, (vec_str, artista, titulo, album, genero, capa_album, link_youtube, rid))
+                conn.commit()
+            return int(rid)
 
-def listar(limit: int = 20) -> list[dict]:
+def listar(limit: int = 20) -> List[Dict[str, Any]]:
     with conectar() as conn:
-        with conn.cursor() as cur:
+        with conn.cursor(dictionary=True) as cur:
             cur.execute(f"""
-                SELECT id, titulo, artista, nome, link_youtube, criado_em
-                FROM {DB_TABELA_NOVA} ORDER BY id DESC LIMIT %s
-            """, (limit,))
+                SELECT id, titulo, artista,
+                       COALESCE(link_youtube, '') AS caminho,
+                       created_at
+                  FROM {DB_TABLE_NAME}
+              ORDER BY id DESC
+                 LIMIT %s
+            """, (int(limit),))
+            return [dict(r) for r in cur.fetchall()]
+
+def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
+    """
+    Retorna X (n x d), ids (n), metas (dict com nome/titulo/artista/link)
+    Ignora linhas com vetor inválido.
+    """
+    with conectar() as conn:
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(f"""
+                SELECT id, nome, caracteristicas, titulo, artista, link_youtube
+                  FROM {DB_TABLE_NAME}
+                 WHERE caracteristicas IS NOT NULL AND caracteristicas <> ''
+            """)
             rows = cur.fetchall()
-    out = []
-    for rid, titulo, artista, nome, link, dt in rows:
-        out.append({
-            "id": int(rid),
-            "titulo": titulo or nome,
-            "artista": artista or "",
-            "caminho": link or nome,
-            "created_at": str(dt),
-        })
-    return out
+
+    ids, metas, feats = [], [], []
+    for r in rows:
+        try:
+            vec = [float(x) for x in (r["caracteristicas"].split(","))]
+            feats.append(vec)
+            ids.append(int(r["id"]))
+            metas.append({
+                "nome": r["nome"],
+                "titulo": r.get("titulo"),
+                "artista": r.get("artista"),
+                "caminho": r.get("link_youtube"),
+            })
+        except Exception:
+            continue
+
+    if not feats:
+        return np.zeros((0, 1)), [], []
+    X = np.asarray(feats, dtype=float)
+    return X, ids, metas
