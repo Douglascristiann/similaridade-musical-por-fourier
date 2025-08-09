@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Orquestra metadados: Spotify → (Discogs → Deezer) → Shazam.
-Valida contra hints (título/artista) e respeita STRICT_METADATA.
+Orquestra metadados com preenchimento por CAMADAS e por CAMPO:
+Spotify → Discogs → Deezer → Shazam (+ Discogs/Deezer pós-Shazam)
+Se algum campo ainda ficar vazio, aplica defaults:
+  album/genero = "Desconhecido", capa_album = "Não Encontrado"
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any, List
@@ -11,7 +13,7 @@ from difflib import SequenceMatcher
 
 from app_v4_new.config import DISCOGS_TOKEN, STRICT_METADATA, INSERT_ON_LOW_CONFIDENCE
 
-# integrações moduladas (mesma pasta do spotify.py)
+# integrações (na mesma pasta de spotify.py)
 from app_v4_new.integrations.spotify import enrich_from_spotify
 from app_v4_new.integrations.discogs import search_discogs
 from app_v4_new.integrations.deezer  import search_deezer
@@ -19,7 +21,7 @@ from app_v4_new.integrations.shazam_api import recognize_with_cache
 
 log = logging.getLogger("FourierMatch")
 
-# ---------- util fuzz ----------
+# =============== utils de normalização/fuzzy ===============
 def _norm(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
@@ -63,19 +65,48 @@ def _parse_title_tokens(text: str) -> tuple[Optional[str], Optional[str], Option
     t = re.sub(r"\s+", " ", t).strip()
     parts = [p.strip() for p in t.split(" - ") if p.strip()]
     if len(parts) >= 3:
-        artist = parts[0]
-        album = parts[-1]
-        track = " - ".join(parts[1:-1])
-        return artist, track, album
+        return parts[0], " - ".join(parts[1:-1]), parts[-1]
     if len(parts) == 2:
         return parts[0], parts[1], None
     return None, parts[0] if parts else None, None
 
-# ---------- pipeline ----------
+# =============== helpers de merge ===============
+def _is_empty(v: Optional[str]) -> bool:
+    if v is None:
+        return True
+    v2 = str(v).strip().lower()
+    return (v2 == "" or v2 in {"desconhecido", "nao encontrado", "não encontrado"})
+
+def _merge_field(dst: Dict[str, Any], src: Dict[str, Any], f_src: str, f_dst: str) -> None:
+    """Se o campo f_dst de dst estiver vazio, preenche com src[f_src] (se existir/e for não-vazio)."""
+    if _is_empty(dst.get(f_dst)) and not _is_empty(src.get(f_src)):
+        dst[f_dst] = src.get(f_src)
+
+def _merge_meta(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+    """Mescla título, artista, álbum, capa, gêneros (em string, coma-separada)."""
+    if not src:
+        return
+    for pair in [("title","title"), ("artist","artist"), ("album","album"), ("cover","cover")]:
+        _merge_field(dst, src, pair[0], pair[1])
+    # gêneros podem vir como list -> string
+    g = src.get("genres")
+    if _is_empty(dst.get("genres")) and g:
+        if isinstance(g, list):
+            dst["genres"] = ", ".join(g)
+        else:
+            dst["genres"] = str(g)
+
+# =============== pipeline principal ===============
 def enrich_metadata(arquivo: Path, duration_sec: float, hints: Dict[str, Any]) -> Dict[str, Any]:
     """
     Retorna dict com:
       { title, artist, album, genres, cover, accepted }
+    Estratégia:
+      1) Spotify
+      2) Discogs
+      3) Deezer
+      4) Shazam (se ainda faltar título/artista) + nova rodada Discogs/Deezer
+      5) Defaults (album/genero/capa se vazios)
     Em modo estrito (STRICT_METADATA=True), exige artista+titulo confiáveis.
     """
     artist_hint = hints.get("artist")
@@ -83,90 +114,109 @@ def enrich_metadata(arquivo: Path, duration_sec: float, hints: Dict[str, Any]) -
     album_hint  = hints.get("album")
     yt_thumb    = hints.get("thumb")
 
-    titulo = arquivo.stem
-    artista = "desconhecido"
-    album = genero = capa = None
+    # estado acumulado
+    meta: Dict[str, Any] = {
+        "title": arquivo.stem,          # valor base
+        "artist": "desconhecido",
+        "album": None,
+        "cover": yt_thumb or None,      # se tiver thumb do YT, já entra como candidato
+        "genres": None,
+    }
 
-    # 1) Spotify (alta precisão)
-    used_spotify = False
+    # ---------- 1) Spotify ----------
     try:
         if artist_hint or track_hint:
-            log.info("🟢 Buscando no Spotify (metadados confiáveis)…")
+            log.info("🟢 Spotify…")
             sp = enrich_from_spotify(artist_hint, track_hint, album_hint, duration_sec)
-            if sp.get("accepted"):
-                titulo  = sp.get("title")  or titulo
-                artista = sp.get("artist") or artista
-                album   = sp.get("album")  or album
-                capa    = sp.get("cover")  or yt_thumb or capa
-                g_list  = sp.get("genres")
-                if g_list: genero = ", ".join(g_list)
-                used_spotify = True
-            else:
-                log.info(f"Spotify não confirmou ({sp.get('reason')}). Indo para Discogs/Deezer…")
+            if sp:
+                _merge_meta(meta, sp)
+                if not _is_empty(sp.get("cover")) and _is_empty(meta.get("cover")):
+                    meta["cover"] = sp.get("cover")
     except Exception as e:
-        log.info(f"Spotify indisponível: {e}. Partindo para Discogs/Deezer…")
+        log.info(f"Spotify indisponível: {e}")
 
-    # 2) Discogs → Deezer (se Spotify não bateu)
-    if not used_spotify:
+    # ---------- 2) Discogs ----------
+    try:
         q_fb = " ".join([p for p in [artist_hint, track_hint, album_hint] if p]) or arquivo.stem
+        log.info("🔵 Discogs…")
+        dg = search_discogs(artist_hint, track_hint, album_hint, q_fb, token=DISCOGS_TOKEN)
+        if dg:
+            # valida suavemente com hints (quando existirem)
+            if (_artist_match_ok(dg.get("artist",""), artist_hint) or _is_empty(meta["artist"])) and \
+               (_ratio(dg.get("title",""), track_hint or "") >= 0.55 or _is_empty(track_hint)):
+                _merge_meta(meta, dg)
+    except Exception as e:
+        log.info(f"Discogs indisponível: {e}")
 
-        md = search_discogs(artist_hint, track_hint, album_hint, q_fb, token=DISCOGS_TOKEN)
-        if md and (_artist_match_ok(md.get("artist",""), artist_hint)) and (_ratio(md.get("title",""), track_hint or "") >= 0.60):
-            titulo = md.get("title") or titulo
-            artista = md.get("artist") or artista
-            album = md.get("album") or album_hint or album
-            capa = md.get("cover") or yt_thumb or capa
-            if md.get("genres"):
-                genero = ", ".join(md["genres"]) if isinstance(md["genres"], list) else str(md["genres"])
-        else:
-            md2 = search_deezer(artist_hint, track_hint, album_hint, q_fb)
-            if md2 and (_artist_match_ok(md2.get("artist",""), artist_hint)) and (_ratio(md2.get("title",""), track_hint or "") >= 0.60):
-                titulo = md2.get("title") or titulo
-                artista = md2.get("artist") or artista
-                album = md2.get("album") or album_hint or album
-                capa = md2.get("cover") or yt_thumb or capa
-                if md2.get("genres"):
-                    genero = ", ".join(md2["genres"]) if isinstance(md2["genres"], list) else str(md2["genres"])
-            else:
-                # 3) Shazam (reconhecimento por áudio)
-                log.info("🎧 Tentando reconhecer pelo Shazam…")
-                rec = recognize_with_cache(arquivo)
-                if rec and (rec.title or rec.artist):
-                    if rec.title:  titulo = rec.title
-                    if rec.artist: artista = rec.artist
-                    # opcional: tentar completar álbum/capa via Discogs com o retorno do Shazam
-                    if DISCOGS_TOKEN and rec.title and rec.artist:
-                        try:
-                            md3 = search_discogs(rec.artist, rec.title, None, f"{rec.artist} {rec.title}", token=DISCOGS_TOKEN)
-                            if md3:
-                                if md3.get("album"): album = md3["album"]
-                                if md3.get("cover"): capa = md3["cover"]
-                                if md3.get("genres"):
-                                    genero = ", ".join(md3["genres"]) if isinstance(md3["genres"], list) else str(md3["genres"])
-                        except Exception:
-                            pass
+    # ---------- 3) Deezer ----------
+    try:
+        log.info("🟣 Deezer…")
+        dz = search_deezer(artist_hint, track_hint, album_hint, q_fb)
+        if dz:
+            if (_artist_match_ok(dz.get("artist",""), artist_hint) or _is_empty(meta["artist"])) and \
+               (_ratio(dz.get("title",""), track_hint or "") >= 0.55 or _is_empty(track_hint)):
+                _merge_meta(meta, dz)
+    except Exception as e:
+        log.info(f"Deezer indisponível: {e}")
 
-    # 4) Regras de aceitação
+    # ---------- 4) Shazam (se ainda estiver fraco em título/artista) ----------
+    need_core = _is_empty(meta.get("title")) or (meta.get("title") == arquivo.stem) or _is_empty(meta.get("artist")) or (meta.get("artist") == "desconhecido")
+    if need_core:
+        try:
+            log.info("🎧 Shazam…")
+            rec = recognize_with_cache(arquivo)
+            if rec:
+                # atualiza base com título/artista detectados
+                if not _is_empty(rec.title):  meta["title"]  = rec.title
+                if not _is_empty(rec.artist): meta["artist"] = rec.artist
+
+                # com o que o Shazam deu, tenta completar álbum/capa/gênero
+                a2, t2 = meta.get("artist"), meta.get("title")
+                try:
+                    dg2 = search_discogs(a2, t2, None, f"{a2} {t2}", token=DISCOGS_TOKEN)
+                    if dg2:
+                        _merge_meta(meta, dg2)
+                except Exception:
+                    pass
+                try:
+                    dz2 = search_deezer(a2, t2, None, f"{a2} {t2}")
+                    if dz2:
+                        _merge_meta(meta, dz2)
+                except Exception:
+                    pass
+        except Exception as e:
+            log.info(f"Shazam indisponível: {e}")
+
+    # ---------- 5) Defaults para campos faltantes ----------
+    if _is_empty(meta.get("album")):
+        meta["album"] = "Desconhecido"
+    if _is_empty(meta.get("genres")):
+        meta["genres"] = "Desconhecido"
+    if _is_empty(meta.get("cover")):
+        meta["cover"] = "Não Encontrado"
+
+    # ---------- Aceitação estrita (apenas título/artista) ----------
     accepted = True
     if STRICT_METADATA:
-        a_ok = artista and artista != "desconhecido"
-        t_ok = titulo and (titulo != arquivo.stem)
+        a_ok = not _is_empty(meta.get("artist")) and meta.get("artist") != "desconhecido"
+        t_ok = not _is_empty(meta.get("title")) and meta.get("title") != arquivo.stem
         if not (a_ok and t_ok):
             if not INSERT_ON_LOW_CONFIDENCE:
                 accepted = False
             else:
-                # grava com hints (modo permissivo)
-                artista = artist_hint or artista
-                titulo  = track_hint  or titulo
-                album   = album_hint  or album
-                capa    = yt_thumb    or capa
+                # usa hints como fallback leve
+                if _is_empty(meta.get("artist")) and not _is_empty(artist_hint): meta["artist"] = artist_hint
+                if (meta.get("title") == arquivo.stem) and not _is_empty(track_hint): meta["title"] = track_hint
+                if _is_empty(meta.get("album")) and not _is_empty(album_hint): meta["album"] = album_hint
+                if _is_empty(meta.get("cover")) and not _is_empty(yt_thumb): meta["cover"] = yt_thumb
                 accepted = True
 
+    # normaliza saída
     return {
-        "title":   titulo,
-        "artist":  artista,
-        "album":   album,
-        "genres":  genero,
-        "cover":   capa,
+        "title":   meta.get("title"),
+        "artist":  meta.get("artist"),
+        "album":   meta.get("album"),
+        "genres":  meta.get("genres"),
+        "cover":   meta.get("cover"),
         "accepted": accepted
     }
