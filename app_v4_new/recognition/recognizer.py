@@ -1,4 +1,4 @@
-
+# app_v4_new/recognition/recognizer.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -12,7 +12,7 @@ try:
 except Exception:
     pass
 
-from config import AUDD_TOKEN  # usa seu token do config.py
+from app_v4_new.config import AUDD_TOKEN
 
 @dataclass
 class RecognitionResult:
@@ -66,14 +66,71 @@ def _audd(file_path: str) -> Optional[dict]:
     except Exception:
         return None
 
-def recognize_with_cache(file_path: str | Path) -> RecognitionResult:
+def _shazam(file_path: str) -> Optional[dict]:
+    try:
+        from shazamio import Shazam  # type: ignore
+        import asyncio
+    except Exception:
+        return None
+
+    async def _run(path: str):
+        try:
+            shazam = Shazam()
+            out = await shazam.recognize(path)  # método atual
+        except Exception:
+            return None
+        if not out:
+            return None
+        track = out.get("track") or {}
+        title = track.get("title")
+        artist = track.get("subtitle")
+        isrc = None
+        for s in track.get("sections") or []:
+            if isinstance(s, dict) and s.get("type") == "SONG":
+                for m in s.get("metadata") or []:
+                    if m.get("title") == "ISRC":
+                        isrc = m.get("text"); break
+        return {
+            "title": title,
+            "artist": artist,
+            "album": None,
+            "isrc": isrc,
+            "source": "shazam",
+            "confidence": 1.0 if title and artist else 0.0,
+            "raw_shazam": out,
+        }
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    try:
+        if loop.is_running():
+            new_loop = asyncio.new_event_loop()
+            res = new_loop.run_until_complete(_run(str(file_path)))
+            new_loop.close()
+            return res
+        else:
+            return loop.run_until_complete(_run(str(file_path)))
+    except Exception:
+        return None
+
+def recognize_with_cache(file_path: str | Path, prefer_shazam_first: bool = True) -> RecognitionResult:
     key = _file_hash(file_path)
     if key in _MEMO:
         r = _MEMO[key]
         return RecognitionResult(r.get("title"), r.get("artist"), r.get("album"),
                                  r.get("isrc"), r.get("source"), float(r.get("confidence") or 0.0), r)
-    # Somente AudD nesta versão (Shazam opcional; pode ser adicionado se quiser)
-    result = _audd(str(file_path)) or {"title": None, "artist": None, "album": None, "isrc": None, "source": None, "confidence": 0.0}
+
+    result = None
+    if prefer_shazam_first:
+        result = _shazam(str(file_path))
+    if not result:
+        result = _audd(str(file_path))
+    if not result:
+        result = {"title": None, "artist": None, "album": None, "isrc": None, "source": None, "confidence": 0.0}
+
     _MEMO[key] = result
     return RecognitionResult(
         title=result.get("title"),

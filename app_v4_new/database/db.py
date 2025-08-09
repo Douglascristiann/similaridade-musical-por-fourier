@@ -1,16 +1,20 @@
-
 from __future__ import annotations
-import os
+import os, sys
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import mysql.connector
 import numpy as np
 
-# Importa seu config.py (na raiz do projeto)
-from config import DB_CONFIG, EXPECTED_FEATURE_LENGTH  # tipo: ignore
+# --- achar config.py na RAIZ do projeto ---
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-# Nova tabela em português
+from config import DB_CONFIG, EXPECTED_FEATURE_LENGTH  # usa seu config.py
+
+# Nova tabela em português (pode mudar por env se quiser)
 DB_TABELA_NOVA = os.getenv("DB_TABELA_NOVA", "tb_musicas_fourier")
+
 
 def conectar():
     print(f"[DB] Conectando ao banco {DB_CONFIG.get('host')}:{DB_CONFIG.get('port')}/{DB_CONFIG.get('database')}…")
