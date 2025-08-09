@@ -52,15 +52,13 @@ def _tiv6_from_chroma(C: np.ndarray) -> np.ndarray:
     return tiv6.astype(np.float32)
 
 def _tempo(y_p: np.ndarray, sr: int, hop: int):
-    # Compatível com librosa >=0.10 (feature.rhythm.tempo) e <0.10 (beat.tempo)
     try:
         from librosa.feature.rhythm import tempo as tempo_fn  # type: ignore
     except Exception:
-        tempo_fn = librosa.beat.tempo  # deprecated alias
+        tempo_fn = librosa.beat.tempo
     t_fw = tempo_fn(y=y_p, sr=sr, hop_length=hop, aggregate=None)
     if getattr(t_fw, "size", 0):
         return float(np.median(t_fw)), float(np.std(t_fw)), t_fw
-    # fallback único
     t = tempo_fn(y=y_p, sr=sr, hop_length=hop)
     return float(t), 0.0, np.array([t], dtype=float)
 

@@ -18,30 +18,23 @@ try:
 except Exception:
     pass
 
-# IMPORTS ROBUSTOS
+# Imports robustos
 try:
-    from .config_app import APP_NAME, APP_VERSION, ORG_TITLE, CREATORS, TCC_TITLE, BLOCK_SCALER_PATH, BLOCK_WEIGHTS, DOWNLOADS_DIR, COOKIEFILE_PATH
+    from .config_app import APP_NAME, APP_VERSION, DOWNLOADS_DIR, COOKIEFILE_PATH
     from .audio.extrator_fft import extrair_features_completas
-    from .storage.mysql_db import (
-        ensure_schema, insert_track, list_tracks, AUDIO_EXTS
-    )
-    from .recom.knn_recommender import (
-        recomendar_por_audio, preparar_base_escalada, formatar_percentual
-    )
+    from .database.db import criar_tabela, upsert_musica, carregar_matriz, listar
+    from .recom.knn_recommender import recomendar_por_audio, preparar_base_escalada, formatar_percentual
     from .recognition.recognizer import recognize_with_cache
+    from config import BLOCK_WEIGHTS  # usa seu config.py
 except Exception:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from app_v5.config_app import APP_NAME, APP_VERSION, ORG_TITLE, CREATORS, TCC_TITLE, BLOCK_SCALER_PATH, BLOCK_WEIGHTS, DOWNLOADS_DIR, COOKIEFILE_PATH
-    from app_v5.audio.extrator_fft import extrair_features_completas
-    from app_v5.storage.mysql_db import (
-        ensure_schema, insert_track, list_tracks, AUDIO_EXTS
-    )
-    from app_v5.recom.knn_recommender import (
-        recomendar_por_audio, preparar_base_escalada, formatar_percentual
-    )
-    from app_v5.recognition.recognizer import recognize_with_cache
+    from app_v4_new.config_app import APP_NAME, APP_VERSION, DOWNLOADS_DIR, COOKIEFILE_PATH
+    from app_v4_new.audio.extrator_fft import extrair_features_completas
+    from app_v4_new.database.db import criar_tabela, upsert_musica, carregar_matriz, listar
+    from app_v4_new.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada, formatar_percentual
+    from app_v4_new.recognition.recognizer import recognize_with_cache
+    from config import BLOCK_WEIGHTS
 
-# Logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("FourierMatch")
 
@@ -54,14 +47,10 @@ BANNER = r"""
                       /____/          Similaridade musical por Fourier
 """
 
-# -------------------- Helpers UI --------------------
 def _print_header():
     os.system("")
     print(BANNER)
     print(f"🎵  {APP_NAME} v{APP_VERSION}")
-    print(f"🏫  {ORG_TITLE}")
-    print(f"👨‍💻  Criadores: {', '.join(CREATORS)}")
-    print(f"📚  {TCC_TITLE}")
     print("-" * 72)
 
 def _format_table(rows: list[dict], columns: list[str]) -> str:
@@ -84,31 +73,19 @@ def _format_table(rows: list[dict], columns: list[str]) -> str:
         out.append(" | ".join(v.ljust(w) for v, w in zip(line, widths)))
     return "\n".join(out)
 
-def _ask(prompt: str) -> str:
-    try:
-        return input(prompt)
-    except EOFError:
-        return ""
-
 def _discover_audio_paths(path: Path, recursive: bool) -> list[Path]:
+    AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".aiff", ".aif"}
     if path.is_file():
         return [path] if path.suffix.lower() in AUDIO_EXTS else []
     pattern = "**/*" if recursive else "*"
     return [p for p in path.glob(pattern) if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
 
-# -------------------- YouTube download --------------------
 def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) -> list[Path]:
-    """
-    Baixa áudio do YouTube (depende de yt-dlp + ffmpeg).
-    Usa cookies em COOKIEFILE_PATH se existir.
-    Retorna a lista de caminhos dos arquivos de áudio extraídos (mp3).
-    """
     try:
         import yt_dlp  # type: ignore
     except Exception:
         log.error("❌ yt-dlp não está instalado. Instale com:  pip install yt-dlp")
         return []
-
     pasta_destino.mkdir(parents=True, exist_ok=True)
     ydl_opts = {
         "format": "bestaudio/best",
@@ -126,11 +103,11 @@ def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) 
         log.warning(f"⚠️  cookies.txt não encontrado em {COOKIEFILE_PATH}; continuando sem cookies.")
         ydl_opts.pop("cookiefile", None)
 
-    results: list[Path] = []
+    results = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            def _resolve_final(p_info) -> Path | None:
+            def _resolve_final(p_info):
                 try:
                     base = Path(ydl.prepare_filename(p_info))
                     cand = base.with_suffix(".mp3")
@@ -139,7 +116,6 @@ def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) 
                     return base if base.exists() else None
                 except Exception:
                     return None
-
             if "entries" in info and isinstance(info["entries"], list):
                 for it in info["entries"]:
                     if not it:
@@ -154,10 +130,9 @@ def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) 
     except Exception as e:
         log.error(f"❌ Erro ao baixar: {e}")
         return []
-
     return results
 
-# -------------------- Pipelines --------------------
+# --------- Ações ---------
 def processar_audio_local(arquivo: Path, origem_link: str | None = None, enriquecer: bool = True, recomendar: bool = True, k: int = 3, sr: int = 22050) -> None:
     if not arquivo.exists():
         log.error(f"❌ Arquivo não encontrado: {arquivo}")
@@ -169,29 +144,27 @@ def processar_audio_local(arquivo: Path, origem_link: str | None = None, enrique
 
         titulo = arquivo.stem
         artista = "desconhecido"
-        album = genero = capa = None
         if enriquecer:
-            log.info("🔎 Reconhecendo metadados (Shazam/AudD)…")
+            log.info("🔎 Reconhecendo metadados (AudD)…")
             rec = recognize_with_cache(arquivo)
             if rec.title:  titulo = rec.title
             if rec.artist: artista = rec.artist
 
         nome = arquivo.name
-        log.info("💾 Gravando no MySQL…")
-        rid = insert_track(
-            nome=nome, vec=vec, artista=artista, titulo=titulo,
-            album=album, genero=genero, capa_album=capa,
-            link_youtube=origem_link or str(arquivo.resolve()), upsert=True
+        log.info("💾 Gravando no MySQL (tabela nova)…")
+        rid = upsert_musica(
+            nome=nome, caracteristicas=vec, artista=artista, titulo=titulo,
+            album=None, genero=None, capa_album=None,
+            link_youtube=origem_link or str(arquivo.resolve())
         )
         log.info(f"✅ Indexado id={rid}  {arquivo.name}  →  {titulo} — {artista}")
 
         if recomendar:
             log.info("🤝 Gerando recomendações…")
-            recs = recomendar_por_audio(arquivo, k=k, sr=sr, excluir_caminho=nome)
+            recs = recomendar_por_audio(arquivo, k=k, sr=sr, excluir_nome=nome)
             if not recs:
                 print("\nℹ️  Sem vizinhos suficientes ainda. Ingerir mais faixas ajuda.")
             else:
-                # formata %
                 for r in recs:
                     r["similaridade"] = formatar_percentual(float(r["similaridade"]))
                 cols = ["id", "titulo", "artista", "caminho", "similaridade"]
@@ -226,7 +199,7 @@ def recalibrar_e_recomendar(k: int = 3, sr: int = 22050):
     log.info(f"✅ Scalado {Xs.shape[0]} faixas x {Xs.shape[1]} dims.\n")
     f = Path(input("Arquivo de áudio para recomendar (ou Enter para pular): ").strip() or "")
     if f.exists():
-        recs = recomendar_por_audio(f, k=k, sr=sr, excluir_caminho=f.name)
+        recs = recomendar_por_audio(f, k=k, sr=sr, excluir_nome=f.name)
         if recs:
             for r in recs:
                 r["similaridade"] = formatar_percentual(float(r["similaridade"]))
@@ -237,7 +210,7 @@ def recalibrar_e_recomendar(k: int = 3, sr: int = 22050):
             print("Nenhuma recomendação encontrada.")
 
 def listar_banco(limite: int = 20):
-    rows = list_tracks(limit=limite)
+    rows = listar(limit=limite)
     if not rows:
         print("Banco vazio.")
         return
@@ -252,13 +225,13 @@ def menu() -> str:
     print("3) Upload em massa (pasta local)")
     print("4) Recalibrar & Recomendar")
     print("5) Playlist do YouTube (bulk)")
-    print("6) Listar últimos itens do banco")
+    print("6) Listar últimos itens do banco (tabela nova)")
     print("0) Sair")
     return input("Opção: ").strip()
 
 def loop_interativo():
     _print_header()
-    ensure_schema()
+    criar_tabela()
     print(f"⬇️  Downloads: {DOWNLOADS_DIR}\n")
     while True:
         opc = menu()
@@ -295,34 +268,17 @@ def loop_interativo():
         else:
             print("❌ Opção inválida.")
 
-# -------------------- CLI opcional --------------------
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog=APP_NAME, description=f"{APP_NAME} — Similaridade musical por Fourier")
-    sub = p.add_subparsers(dest="cmd")
-    pa = sub.add_parser("menu", help="Abre o menu interativo.")
-    pa.set_defaults(func=lambda args: loop_interativo())
-    return p
-
+# -------------------- Entry-point --------------------
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         loop_interativo()
         return 0
-    parser = build_parser()
+    parser = argparse.ArgumentParser(prog=APP_NAME, description=f"{APP_NAME} — Menu interativo")
+    parser.add_argument("--menu", action="store_true", help="Abrir menu (default).")
     args = parser.parse_args(argv)
-    if not hasattr(args, "func"):
-        parser.print_help()
-        return 1
-    try:
-        return args.func(args)
-    except KeyboardInterrupt:
-        print("\nInterrompido pelo usuário.")
-        return 130
-    except Exception as e:
-        print(f"❌ Erro: {e}")
-        if "--verbose" in argv or "-v" in argv:
-            traceback.print_exc()
-        return 1
+    loop_interativo()
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

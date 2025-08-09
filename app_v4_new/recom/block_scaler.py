@@ -36,15 +36,14 @@ class BlockStandardizer:
 
     def _check(self):
         if self.mu is None or self.sigma is None:
-            raise RuntimeError("Scaler not fitted. Call fit() or load().")
+            raise RuntimeError("Scaler não treinado.")
 
     def transform_matrix(self, X: np.ndarray, weights: dict[str, float] | None = None) -> np.ndarray:
         self._check()
         Xs = (X - self.mu) / self.sigma
         if weights:
             for name, w in weights.items():
-                if name in self.slices:
-                    Xs[:, self.slices[name]] *= float(w)
+                Xs[:, self.slices[name]] *= float(w)
         return Xs
 
     def transform_vector(self, x: np.ndarray, weights: dict[str, float] | None = None) -> np.ndarray:
@@ -52,8 +51,7 @@ class BlockStandardizer:
         xs = (x - self.mu) / self.sigma
         if weights:
             for name, w in weights.items():
-                if name in self.slices:
-                    xs[self.slices[name]] *= float(w)
+                xs[self.slices[name]] *= float(w)
         return xs
 
     def save(self, path: Path):
@@ -79,7 +77,7 @@ class BlockStandardizer:
 def load_schema_standardizer(schema_path: Path = SCHEMA_PATH) -> BlockStandardizer:
     schema = load_schema(schema_path)
     if not schema:
-        raise RuntimeError("Feature schema not found. Extract at least one track to generate it.")
+        raise RuntimeError("Schema de features não encontrado. Extraia ao menos uma faixa primeiro.")
     order = list(schema["order"])
     lengths = {k: int(v) for k, v in schema["lengths"].items()}
     return BlockStandardizer(order, lengths)

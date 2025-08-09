@@ -5,6 +5,5 @@ soundfile
 pyloudnorm; python_version >= "3.8"
 python-dotenv
 requests
-shazamio; python_version >= "3.8"
 yt-dlp
 mysql-connector-python
