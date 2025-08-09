@@ -6,8 +6,8 @@ import librosa
 
 from .block_scaler import load_or_fit_scaler
 from ..audio.extrator_fft import extrair_features_completas
-from ..storage.db_utils import load_feature_matrix, default_db_path
-from ..config import BLOCK_SCALER_PATH, BLOCK_WEIGHTS
+from ..storage.mysql_db import load_feature_matrix, insert_track
+from ..config_app import BLOCK_SCALER_PATH, BLOCK_WEIGHTS
 
 def cosine_knn(Xs: np.ndarray, q: np.ndarray, k: int = 10) -> tuple[np.ndarray, np.ndarray]:
     Xn = Xs / (np.linalg.norm(Xs, axis=1, keepdims=True) + 1e-12)
@@ -18,37 +18,31 @@ def cosine_knn(Xs: np.ndarray, q: np.ndarray, k: int = 10) -> tuple[np.ndarray, 
     idx = idx[np.argsort(-sims[idx])]
     return idx, sims[idx]
 
-def preparar_base_escalada(db_path: str | Path | None = None):
-    if db_path is None:
-        db_path = default_db_path()
-    X, ids, metas = load_feature_matrix(db_path)
+def preparar_base_escalada():
+    X, ids, metas = load_feature_matrix()
     scaler = load_or_fit_scaler(X, save_path=BLOCK_SCALER_PATH)
-    from ..config import BLOCK_WEIGHTS
     Xs = scaler.transform_matrix(X, weights=BLOCK_WEIGHTS).astype(np.float32)
     return Xs, ids, metas, scaler
 
-def recomendar_por_id(db_path: str | Path, song_id: int, k: int = 10) -> list[dict]:
-    Xs, ids, metas, scaler = preparar_base_escalada(db_path)
-    id2idx = {i: j for j, i in enumerate(ids)}
-    if song_id not in id2idx:
-        raise KeyError(f"id {song_id} não encontrado no banco.")
-    q = Xs[id2idx[song_id]]
-    idx, sims = cosine_knn(Xs, q, k+1)
+def recomendar_por_audio(audio_path: str | Path, k: int = 3, sr: int = 22050, excluir_caminho: str | None = None):
+    Xs, ids, metas, scaler = preparar_base_escalada()
+    y, _sr = librosa.load(str(audio_path), sr=sr, mono=True)
+    q_raw = extrair_features_completas(y, _sr)
+    q = scaler.transform_vector(q_raw, weights=BLOCK_WEIGHTS).astype(np.float32)
+    idx, sims = cosine_knn(Xs, q, k + 5)  # pega alguns a mais para poder filtrar o próprio arquivo
+
     out = []
     for j, s in zip(idx, sims):
-        if ids[j] == song_id:
+        meta = dict(metas[j])
+        # Se for o mesmo caminho/nome, pula
+        if excluir_caminho and (excluir_caminho in (meta.get("caminho") or "", meta.get("nome") or "")):
             continue
-        meta = dict(metas[j]); meta["similaridade"] = float(s); meta["index"] = int(j)
+        meta["similaridade"] = float(s)
         out.append(meta)
         if len(out) == k:
             break
     return out
 
-def recomendar_por_audio(db_path: str | Path, audio_path: str | Path, k: int = 10, sr: int = 22050) -> list[dict]:
-    Xs, ids, metas, scaler = preparar_base_escalada(db_path)
-    y, _sr = librosa.load(str(audio_path), sr=sr, mono=True)
-    q_raw = extrair_features_completas(y, _sr)
-    from ..config import BLOCK_WEIGHTS
-    q = scaler.transform_vector(q_raw, weights=BLOCK_WEIGHTS).astype(np.float32)
-    idx, sims = cosine_knn(Xs, q, k)
-    return [dict(metas[j], similaridade=float(s), index=int(j)) for j, s in zip(idx, sims)]
+def formatar_percentual(sim: float) -> str:
+    pct = max(-1.0, min(1.0, sim)) * 100.0
+    return f"{pct:.1f}%"

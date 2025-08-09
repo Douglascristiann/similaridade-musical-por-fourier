@@ -5,7 +5,6 @@ import numpy as np
 from ..audio.feature_schema import load_schema, SCHEMA_PATH
 
 class BlockStandardizer:
-    """Padronização por bloco (zero-mean/unit-std) com pesos por bloco (opcional)."""
     def __init__(self, order: list[str], lengths: dict[str, int]):
         self.order = order
         self.lengths = {k: int(v) for k, v in lengths.items()}
@@ -21,7 +20,7 @@ class BlockStandardizer:
 
     def fit(self, X: np.ndarray) -> "BlockStandardizer":
         if X.shape[1] != self.total:
-            raise ValueError(f"Dimensão X={X.shape[1]} difere do schema={self.total}")
+            raise ValueError(f"X dim={X.shape[1]} differs from schema={self.total}")
         mu_parts, sg_parts = [], []
         for name in self.order:
             sl = self.slices[name]
@@ -37,7 +36,7 @@ class BlockStandardizer:
 
     def _check(self):
         if self.mu is None or self.sigma is None:
-            raise RuntimeError("Scaler não ajustado. Chame fit() ou load().")
+            raise RuntimeError("Scaler not fitted. Call fit() or load().")
 
     def transform_matrix(self, X: np.ndarray, weights: dict[str, float] | None = None) -> np.ndarray:
         self._check()
@@ -80,7 +79,7 @@ class BlockStandardizer:
 def load_schema_standardizer(schema_path: Path = SCHEMA_PATH) -> BlockStandardizer:
     schema = load_schema(schema_path)
     if not schema:
-        raise RuntimeError("Schema de features não encontrado. Extraia pelo menos 1 faixa para gerá-lo.")
+        raise RuntimeError("Feature schema not found. Extract at least one track to generate it.")
     order = list(schema["order"])
     lengths = {k: int(v) for k, v in schema["lengths"].items()}
     return BlockStandardizer(order, lengths)

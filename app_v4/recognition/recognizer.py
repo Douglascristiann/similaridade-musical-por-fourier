@@ -4,18 +4,20 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from pathlib import Path
 import hashlib
+import os
+import json
 
 try:
-    from dotenv import load_dotenv  # opcional
+    from dotenv import load_dotenv  # type: ignore
     load_dotenv()
 except Exception:
     pass
 
-from ..config import AUDD_API_TOKEN, DISCOGS_TOKEN, SHAZAM_ENABLE
-from .clients_audd import audd_recognize_file
-from .clients_shazam import shazam_recognize_file
-from .clients_discogs import discogs_search
-from ..storage.db_utils import upsert_recognition, get_recognition, ensure_schema
+from ..integrations.external_config_bridge import load_external_config
+
+_CFG = load_external_config()
+AUDD_API_TOKEN = _CFG.get("AUDD_TOKEN", "")
+DISCOGS_TOKEN  = _CFG.get("DISCOGS_TOKEN", "")
 
 @dataclass
 class RecognitionResult:
@@ -36,6 +38,9 @@ class RecognitionResult:
             d.update(self.extras)
         return d
 
+# Cache ad-hoc em memória (p/ simplificar aqui; DB real opcional)
+_MEMO: Dict[str, dict] = {}
+
 def _file_hash(path: str | Path, algo: str = "sha1", chunk: int = 1024 * 1024) -> str:
     p = Path(path)
     h = hashlib.new(algo)
@@ -47,37 +52,100 @@ def _file_hash(path: str | Path, algo: str = "sha1", chunk: int = 1024 * 1024) -
             h.update(b)
     return h.hexdigest()
 
-def reconhecer_com_cache(db_path: str | Path, file_path: str | Path, use_cache: bool = True) -> RecognitionResult:
-    ensure_schema(db_path)
-    h = _file_hash(file_path)
-    if use_cache:
-        cached = get_recognition(db_path, h)
-        if cached:
-            return RecognitionResult(
-                title=cached.get("title"),
-                artist=cached.get("artist"),
-                album=cached.get("album"),
-                isrc=cached.get("isrc"),
-                source=cached.get("source"),
-                confidence=float(cached.get("confidence") or 0.0),
-                extras=cached,
-            )
+def _audd(file_path: str) -> Optional[dict]:
+    if not AUDD_API_TOKEN:
+        return None
+    try:
+        import requests  # type: ignore
+    except Exception:
+        return None
+    try:
+        p = Path(file_path)
+        files = {"file": (p.name, p.read_bytes())}
+        data = {"api_token": AUDD_API_TOKEN, "return": "apple_music,spotify"}
+        r = requests.post("https://api.audd.io/", data=data, files=files, timeout=30)
+        r.raise_for_status()
+        j = r.json()
+        if not j or j.get("status") != "success" or not j.get("result"):
+            return None
+        res = j["result"]
+        return {
+            "title": res.get("title"),
+            "artist": res.get("artist"),
+            "album": res.get("album"),
+            "isrc": res.get("isrc"),
+            "source": "audd",
+            "confidence": float(res.get("score") or 0.0) if isinstance(res, dict) else 0.0,
+            "raw_audd": res,
+        }
+    except Exception:
+        return None
 
-    # Pipeline: Shazam (se habilitado) -> AudD -> Discogs (enriquecimento)
+def _shazam(file_path: str) -> Optional[dict]:
+    try:
+        from shazamio import Shazam  # type: ignore
+        import asyncio
+    except Exception:
+        return None
+    async def _run(path: str):
+        try:
+            shazam = Shazam()
+            out = await shazam.recognize(path)  # método novo
+        except Exception:
+            return None
+        if not out:
+            return None
+        track = out.get("track") or {}
+        title = track.get("title")
+        artist = track.get("subtitle")
+        isrc = None
+        for s in track.get("sections") or []:
+            if isinstance(s, dict) and s.get("type") == "SONG":
+                for m in s.get("metadata") or []:
+                    if m.get("title") == "ISRC":
+                        isrc = m.get("text"); break
+        return {
+            "title": title,
+            "artist": artist,
+            "album": None,
+            "isrc": isrc,
+            "source": "shazam",
+            "confidence": 1.0 if title and artist else 0.0,
+            "raw_shazam": out,
+        }
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop = asyncio.get_event_loop()
+    try:
+        if loop.is_running():
+            new_loop = asyncio.new_event_loop()
+            res = new_loop.run_until_complete(_run(str(file_path)))
+            new_loop.close()
+            return res
+        else:
+            return loop.run_until_complete(_run(str(file_path)))
+    except Exception:
+        return None
+
+def recognize_with_cache(file_path: str | Path, prefer_shazam_first: bool = True) -> RecognitionResult:
+    key = _file_hash(file_path)
+    if key in _MEMO:
+        r = _MEMO[key]
+        return RecognitionResult(r.get("title"), r.get("artist"), r.get("album"),
+                                 r.get("isrc"), r.get("source"), float(r.get("confidence") or 0.0), r)
+
     result = None
-    if SHAZAM_ENABLE:
-        result = shazam_recognize_file(str(file_path))
-    if not result and AUDD_API_TOKEN:
-        result = audd_recognize_file(str(file_path), AUDD_API_TOKEN)
+    if prefer_shazam_first:
+        result = _shazam(str(file_path))
+    if not result:
+        result = _audd(str(file_path))
     if not result:
         result = {"title": None, "artist": None, "album": None, "isrc": None, "source": None, "confidence": 0.0}
 
-    if result.get("artist") and result.get("title") and DISCOGS_TOKEN:
-        info = discogs_search(result["artist"], result["title"], DISCOGS_TOKEN)
-        if info:
-            result.update({"discogs": info})
-
-    upsert_recognition(db_path, h, result)
+    _MEMO[key] = result
     return RecognitionResult(
         title=result.get("title"),
         artist=result.get("artist"),

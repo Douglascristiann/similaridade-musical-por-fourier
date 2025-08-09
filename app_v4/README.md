@@ -1,73 +1,27 @@
 
-# FourierMatch (app_v4) — PORTUGUÊS
+# FourierMatch (app_v5, PT-BR, MySQL)
 
-Similaridade musical + pipeline de reconhecimento com cache — 100% em português.
+**Universidade Paulista — Curso de Sistemas de Informação**  
+**Criadores:** Douglas Cristian da Cunha (N7970A0), Fábio Silva Matos Filho (N8947E9)  
+**TCC:** "Uma Abordagem Baseada em Análise Espectral para Recomendação Musical: Explorando a Transformada de Fourier como Alternativa aos Métodos Convencionais"
 
-## Destaques
-- **Features “Fourier-friendly”**: normalização de loudness (LUFS/RMS), HPSS, agregação sincronizada ao pulso, MFCC(+Δ,+Δ²), Spectral Contrast, chroma harmônico **alinhado (invariante a transposição)** + **TIV‑6** (DFT), Tonnetz, ZCR/centroid/bandwidth/rolloff, tempo/variância.
-- **Recomendador**: KNN com cosseno + **padronização por bloco** e pesos.
-- **Reconhecimento**: Shazam *(via `shazamio`, opcional)* → **AudD** → enriquecimento **Discogs**; tudo com **cache** em SQLite.
-- **CLI** com comandos em português (mantidos **aliases** em inglês).
+## O que mudou nesta versão
+- Integração **MySQL** (usa seu `config.py` existente, se presente).
+- Menu interativo com UX simples e logs suaves.
+- YouTube com `yt-dlp` e `ffmpeg`, usando `cookies.txt` fixo em `/home/jovyan/work/cache/cookies/cookies.txt` (se existir).
+- Ajustes deprecations: `librosa.feature.rhythm.tempo`, `shazamio.recognize`.
+- Recomendação **Top-3** com **% de similaridade** (cosseno).
+- HPSS, beat-sync, TIV-6, padronização por bloco + pesos (KNN coseno).
 
-## Instalação
+## Como rodar
 ```bash
 pip install -r requirements.txt
+# tenha ffmpeg e mysql rodando
+python -m app_v5.main  # ou: python app_v5/main.py
 ```
 
-### Variáveis de ambiente (.env opcional)
-Crie um `.env` na raiz (ou exporte no shell):
-```env
-AUDD_API_TOKEN=coloque_sua_chave
-DISCOGS_TOKEN=coloque_seu_token
-SHAZAM_ENABLE=true
-```
-> Sem `shazamio` ou com `SHAZAM_ENABLE=false`, o pipeline usa apenas AudD → Discogs.
+> Se você tiver um `config.py` no projeto com `DB_CONFIG`, `DB_TABLE_NAME`, `AUDD_TOKEN`, `DISCOGS_TOKEN`, `EXPECTED_FEATURE_LENGTH`, o app usa automaticamente. Caso contrário, configure via variáveis de ambiente.
 
-## Como usar
-
-**Indexar** (extrair features; com `--enriquecer` faz reconhecimento e preenche título/artista):
-```bash
-python -m app_v4.main indexar ./dataset -r --enriquecer
-# alias em inglês: python -m app_v4.main ingest ./dataset -r --enrich
-```
-
-**Reconhecer** metadados (sem indexar):
-```bash
-python -m app_v4.main reconhecer ./dataset --json
-# alias: recognize
-```
-
-**Recomendar por id**:
-```bash
-python -m app_v4.main recomendar-id 1 --k 10
-# alias: recommend-id
-```
-
-**Recomendar por arquivo**:
-```bash
-python -m app_v4.main recomendar-arquivo ./dataset/uma_faixa.wav --k 10
-# alias: recommend-file
-```
-
-**Reajustar o scaler por bloco** (após crescer a base):
-```bash
-python -m app_v4.main normalizador reajustar
-# alias: scaler rebuild
-```
-
-**Listar itens do banco**:
-```bash
-python -m app_v4.main banco listar --limite 20
-# alias: db list
-```
-
-**Sobre**:
-```bash
-python -m app_v4.main sobre
-# alias: about
-```
-
-## Observações
-- No primeiro run de extração, será criado `app_v4/audio/feature_schema.json` com a composição e o tamanho do vetor de features.
-- A tabela `recognitions` guarda **cache** por hash (SHA‑1) do arquivo.
-- Os **pesos por bloco** ficam em `app_v4/config.py` (`BLOCK_WEIGHTS`). Ajuste e rode `normalizador reajustar`.
+## Notas de DB
+- Tabela: `tb_musicas_v4` (ou a definida no seu `config.py`).
+- Vetor de features: por padrão **157** dims (esta versão); se seu `config.py` exigir outro tamanho (ex.: 161), o app **preenche com zeros** ou **trunca** para caber no seu banco.
