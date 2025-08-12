@@ -11,8 +11,8 @@ for p in (ROOT_DIR, PKG_DIR):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from app_v4_new.cli.menu import loop_interativo, print_header
-from app_v4_new.database.db import criar_tabela
+from app_v5.cli.menu import loop_interativo, print_header
+from app_v5.database.db import criar_tabela
 
 def main() -> int:
     print_header()
