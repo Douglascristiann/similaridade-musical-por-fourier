@@ -1,288 +1,667 @@
 # -*- coding: utf-8 -*-
-from __future__ import annotations
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-import json, logging, traceback
-import librosa
+"""
+Serviços de ingestão e recomendação (compatível com o menu):
+- processar_audio_local(caminho, sr=22050, k_recs=3, recomendar=True)
+- processar_link_youtube(link, enriquecer=True, recomendar=True, k_recs=3, sr=22050)
+- upload_em_massa(pasta, sr=22050, k_recs=3)
+- processar_playlist_youtube(link, sr=22050, k_recs=3)  # alias
+- playlist_bulk(link, sr=22050, k_recs=3)
+- listar_ultimos_itens(limite=10)
+- recalibrar_e_recomendar(k=3, sr=22050)
+- contar_musicas() -> int
 
-from app_v4_new.config import DOWNLOADS_DIR, COOKIEFILE_PATH, AUTO_DELETE_DOWNLOADED
-from app_v4_new.audio.extrator_fft import extrair_features_completas
-from app_v4_new.database.db import upsert_musica
-from app_v4_new.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
-from app_v4_new.services.metadata import enrich_metadata, _parse_title_tokens
-from app_v4_new.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
+Robustez YouTube:
+- fallback de player_client: ios -> android -> web
+- backoff com jitter p/ HTTP 429
+- uso opcional de cookiefile (se existir)
+- playlist: youtubetab:skip=authcheck
+"""
+
+from __future__ import annotations
+
+import os
+import time
+import random
+import logging
+from importlib import import_module
+from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple
+
+from yt_dlp import YoutubeDL
+# topo de app_v4_new/services/ingest.py
+from pathlib import Path
+from app_v4_new.config_app import DOWNLOADS_DIR, COOKIEFILE_PATH
+from app_v4_new.downloader.youtube_dl import (
+    baixar_audio_youtube,
+    baixar_playlist_youtube,
+    buscar_youtube_por_meta,
+)
+
+
+# === Config / DB / Audio / Recom ===
+try:
+    from app_v4_new.config import DOWNLOADS_DIR as _DL_DIR
+except Exception:
+    _DL_DIR = Path(__file__).resolve().parents[1] / "downloads"
+
+DOWNLOADS_DIR = Path(_DL_DIR)
+DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Apagar o áudio após extrair (boa prática)
+try:
+    from app_v4_new.config import DELETE_AUDIO_AFTER_INGEST
+except Exception:
+    DELETE_AUDIO_AFTER_INGEST = True
+
+# Comprimento do vetor e nome da tabela (se expostos)
+try:
+    from app_v4_new.config import EXPECTED_FEATURE_LENGTH, DB_TABLE_NAME  # noqa
+except Exception:
+    EXPECTED_FEATURE_LENGTH = None
+    DB_TABLE_NAME = "tb_musicas"
+
+# Cookiefile/clients para yt-dlp (opcionais)
+try:
+    from app_v4_new.config import COOKIEFILE_PATH  # noqa
+except Exception:
+    COOKIEFILE_PATH = None  # defina no config se quiser usar cookies
+
+try:
+    from app_v4_new.config import YTDLP_CLIENT_SEQUENCE  # noqa
+except Exception:
+    YTDLP_CLIENT_SEQUENCE = ["ios", "android", "web"]
+
+# DB (compatível com suas versões antigas e novas)
+_SALVAR_FUN = None
+try:
+    from app_v4_new.database.db import upsert_musica as _SALVAR_FUN  # type: ignore
+except Exception:
+    try:
+        from app_v4_new.database.db import inserir_musica as _SALVAR_FUN  # type: ignore
+    except Exception:
+        _SALVAR_FUN = None
+
+# Contagem direta (se existir no seu DB)
+_DB_CONTAR = None
+try:
+    from app_v4_new.database.db import contar as _DB_CONTAR  # type: ignore
+except Exception:
+    _DB_CONTAR = None
+
+# Conexão bruta (para contagem SQL fallback)
+_DB_CONNECT = None
+try:
+    from app_v4_new.database.db import conectar as _DB_CONNECT  # type: ignore
+except Exception:
+    _DB_CONNECT = None
+
+# Listagem / Matriz para KNN
+try:
+    from app_v4_new.database.db import listar as _DB_LISTAR  # type: ignore
+except Exception:
+    _DB_LISTAR = None
+
+try:
+    from app_v4_new.database.db import carregar_matriz  # type: ignore
+except Exception:
+    def carregar_matriz():
+        import numpy as np
+        return np.zeros((0, 0)), [], []
+
+# Extrator de features
+from app_v4_new.audio.extrator_fft import extrair_caracteristicas  # type: ignore
+
+# Recomendador (percentis + guard-rails)
+from app_v4_new.recom.knn_recommender import (
+    preparar_base_escalada,
+    recomendar_por_audio,
+    recomendar_por_id,
+)
 
 log = logging.getLogger("FourierMatch")
 
-def _bar_from_pct(pct: float, width: int = 20) -> str:
-    pct = max(0.0, min(100.0, pct))
-    fill = int(round(pct * width / 100.0))
-    return "[" + ("█" * fill) + ("─" * (width - fill)) + "]"
 
-def _clean_link(url: str) -> str:
+# =====================================================================
+# Utilitários
+# =====================================================================
+
+def _parse_hints_from_filename(fname: str) -> Tuple[Optional[str], Optional[str]]:
+    """Extrai (artista, título) do padrão 'Artista - Título' se possível."""
+    base = Path(fname).stem
+
+    lixo = ["(ao vivo)", "(live)", "(oficial)", "[oficial]", "(official)", "[official]",
+            "(audio)", "(áudio)", "(clipe)", "(clip)", "(video)", "(vídeo)"]
+    tmp = base.lower()
+    for t in lixo:
+        tmp = tmp.replace(t, "")
+    base = " ".join(tmp.split()).strip()
+
+    if " - " in base:
+        artista, titulo = base.split(" - ", 1)
+        artista = artista.strip().title()
+        titulo = titulo.strip().title()
+        if artista and titulo:
+            return artista, titulo
+    return None, None
+
+
+def _buscar_youtube_link_simples(artista: str, titulo: str) -> str:
+    """Busca 1 link do YouTube para ('artista titulo') sem cookies."""
+    if not artista or not titulo:
+        return "Não Encontrado"
+
+    query = f"{artista} {titulo}"
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "default_search": "ytsearch",
+        "noplaylist": True,
+    }
     try:
-        from urllib.parse import urlparse, parse_qs
-        if not url:
-            return url
-        pu = urlparse(url)
-        if "youtube.com" in pu.netloc and pu.path == "/watch":
-            q = parse_qs(pu.query)
-            v = q.get("v", [None])[0]
-            if v:
-                return f"https://www.youtube.com/watch?v={v}"
-        return url
-    except Exception:
-        return url
+        with YoutubeDL(ydl_opts) as ydl:
+            result = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            if result and "entries" in result and result["entries"]:
+                vid = result["entries"][0].get("id")
+                if vid:
+                    return f"https://www.youtube.com/watch?v={vid}"
+    except Exception as e:
+        print("❌ Erro yt_dlp (busca simples):", e)
+    return "Não Encontrado"
 
-def _is_url(s: str|None) -> bool:
-    return isinstance(s, str) and s.startswith(("http://","https://"))
 
-def _print_recs_pretty(recs: List[dict]) -> None:
-    print("\n✨ Top 3 Recomendações Musicais ✨\n")
-    medals = ["🥇","🥈","🥉"]; box_w = 69
-    for i, r in enumerate(recs[:3], start=1):
-        medal = medals[i-1] if i <= 3 else f"#{i}"
-        titulo  = r.get("titulo") or "—"
-        artista = r.get("artista") or "—"
-        link    = _clean_link(r.get("caminho") or "")
-        sim_f   = float(r.get("similaridade", 0.0))
-        pct     = (sim_f * 100.0) if sim_f <= 1.0 else sim_f
-        bar     = _bar_from_pct(pct, width=20)
-        head = f"┌─{medal} Top {i} " + "─" * (box_w - len(f"{medal} Top {i} ") - 1) + "┐"
-        tail = "└" + "─" * (box_w + 2) + "┘"
-        print(head)
-        print("│ " + (f"🎵 Título: {titulo}" ).ljust(box_w) + " │")
-        print("│ " + (f"🎤 Artista: {artista}").ljust(box_w) + " │")
-        print("│ " + (f"📊 Similaridade: {pct:.2f}% {bar}").ljust(box_w) + " │")
-        print("│ " + (f"🔗 Link: {link}"     ).ljust(box_w) + " │")
-        print(tail + "\n")
-
-def contar_musicas() -> Optional[int]:
+def _call_integration(module_name: str, func_name: str, *args, **kwargs) -> Optional[Dict[str, Any]]:
+    """Chama uma função em app_v4_new.integrations.*, se existir; senão retorna None."""
     try:
-        import mysql.connector
-        from app_v4_new.config import DB_CONFIG, DB_TABLE_NAME
-        with mysql.connector.connect(**DB_CONFIG) as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"SELECT COUNT(*) FROM {DB_TABLE_NAME}")
-                r = cur.fetchone()
-                return int(r[0]) if r else 0
+        mod = import_module(module_name)
+        fn = getattr(mod, func_name, None)
+        if not callable(fn):
+            return None
+        return fn(*args, **kwargs)
     except Exception:
         return None
 
-def _extract_entries_with_paths(ydl, info_obj) -> List[Dict[str, Any]]:
-    def resolve_one(item):
-        base = Path(ydl.prepare_filename(item))
-        mp3  = base.with_suffix(".mp3") if base.suffix.lower() != ".mp3" else base
-        meta = {
-            "id": item.get("id"),
-            "title": item.get("title"),
-            "uploader": item.get("uploader"),
-            "channel": item.get("channel"),
-            "artist": item.get("artist"),
-            "track": item.get("track"),
-            "webpage_url": item.get("webpage_url"),
-            "thumbnail": item.get("thumbnail"),
-            "thumbnails": item.get("thumbnails"),
-            "playlist_title": item.get("playlist_title"),
-        }
-        try:
-            mp3.with_suffix(".info.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-        except Exception:
-            pass
-        return {"path": mp3, "meta": meta}
-    out = []
-    if "entries" in info_obj and isinstance(info_obj["entries"], list):
-        for it in info_obj["entries"]:
-            if it: out.append(resolve_one(it))
-    else:
-        out.append(resolve_one(info_obj))
-    return out
 
-def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) -> List[Dict[str, Any]]:
-    try:
-        import yt_dlp
-    except Exception:
-        log.error("❌ yt-dlp não está instalado. Instale com:  pip install yt-dlp")
-        return []
-    pasta_destino.mkdir(parents=True, exist_ok=True)
-    from app_v4_new.config import COOKIEFILE_PATH
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": str(pasta_destino / "%(title)s-%(id)s.%(ext)s"),
-        "noplaylist": not playlist,
-        "quiet": True,
-        "no_warnings": True,
-        "prefer_ffmpeg": True,
-        "cookiefile": str(COOKIEFILE_PATH),
-        "postprocessors": [{"key":"FFmpegExtractAudio","preferredcodec":"mp3","preferredquality":"192"}],
-        "extract_flat": False,
-        "skip_download": False,
+def _obter_metadados(path: Path,
+                     hint_artista: Optional[str],
+                     hint_titulo: Optional[str]) -> Dict[str, Any]:
+    """
+    Orquestra metadados (preenche faltantes com 'Desconhecido' / 'Não Encontrado'):
+      Spotify → Discogs → Deezer → Shazam (se necessário)
+      + busca YouTube para arquivos locais
+    """
+    meta: Dict[str, Any] = {
+        "titulo": hint_titulo or None,
+        "artista": hint_artista or None,
+        "album": None,
+        "genero": None,
+        "capa_album": None,
+        "link_youtube": None,
     }
-    if not COOKIEFILE_PATH.exists():
-        ydl_opts.pop("cookiefile", None)
+
+    # Spotify
+    if hint_artista or hint_titulo:
+        query = f"{hint_artista or ''} {hint_titulo or ''}".strip()
+        sp = _call_integration("app_v4_new.integrations.spotify", "search_best_track", query)
+        if not sp:
+            sp = _call_integration("app_v4_new.integrations.spotify", "search_track", query)
+        if isinstance(sp, dict):
+            meta["titulo"] = meta["titulo"] or sp.get("title")
+            meta["artista"] = meta["artista"] or sp.get("artist")
+            meta["album"] = sp.get("album") or meta.get("album")
+            meta["genero"] = sp.get("genre") or meta.get("genero")
+            meta["capa_album"] = sp.get("cover") or meta.get("capa_album")
+
+    # Discogs
+    qd = f"{meta.get('artista') or ''} {meta.get('titulo') or ''}".strip()
+    if qd:
+        dgs = _call_integration("app_v4_new.integrations.discogs_api", "search_discogs", qd)
+        if isinstance(dgs, dict):
+            meta["genero"] = meta.get("genero") or dgs.get("genre")
+            meta["album"] = meta.get("album") or dgs.get("album")
+            meta["capa_album"] = meta.get("capa_album") or dgs.get("cover")
+
+    # Deezer
+    qz = f"{meta.get('artista') or ''} {meta.get('titulo') or ''}".strip()
+    if qz:
+        dz = _call_integration("app_v4_new.integrations.deezer_api", "search_deezer", qz)
+        if isinstance(dz, dict):
+            meta["album"] = meta.get("album") or dz.get("album")
+            meta["capa_album"] = meta.get("capa_album") or dz.get("cover")
+            if not meta.get("link_youtube") and dz.get("youtube"):
+                meta["link_youtube"] = dz.get("youtube")
+
+    # Shazam (se faltar básico)
+    if not meta.get("titulo") or not meta.get("artista"):
+        shz = _call_integration("app_v4_new.integrations.shazam_api", "recognize_file", str(path))
+        if isinstance(shz, dict):
+            meta["titulo"] = meta.get("titulo") or shz.get("title")
+            meta["artista"] = meta.get("artista") or shz.get("artist")
+            meta["album"] = meta.get("album") or shz.get("album")
+            meta["capa_album"] = meta.get("capa_album") or shz.get("cover")
+
+    # Fallbacks
+    for k in ("titulo", "artista", "album", "genero"):
+        if not meta.get(k):
+            meta[k] = "Desconhecido"
+    if not meta.get("capa_album"):
+        meta["capa_album"] = "Não Encontrado"
+
+    # Link YouTube p/ arquivo local
+    if not meta.get("link_youtube") and meta.get("artista") != "Desconhecido" and meta.get("titulo") != "Desconhecido":
+        meta["link_youtube"] = _buscar_youtube_link_simples(meta["artista"], meta["titulo"])
+
+    return meta
+
+
+def _salvar_no_db(nome: str, vetor: List[float], meta: Dict[str, Any]) -> Optional[int]:
+    """Salva no DB usando upsert_musica/inserir_musica (conforme disponível)."""
+    if _SALVAR_FUN is None:
+        print("❌ Nenhuma função de persistência encontrada em app_v4_new.database.db")
+        return None
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return _extract_entries_with_paths(ydl, info)
-    except Exception as e:
-        log.error(f"❌ Erro ao baixar: {e}")
-        return []
-
-def processar_audio_local(
-    arquivo: Path,
-    origem_link: str | None = None,
-    enriquecer: bool = True,
-    recomendar: bool = True,
-    k: int = 3,
-    sr: int = 22050,
-    youtube_meta: Optional[Dict[str, Any]] = None,
-) -> None:
-    try:
-        if not arquivo.exists():
-            log.error(f"❌ Arquivo não encontrado: {arquivo}")
-            return
-
-        log.info("🔧 Extraindo features…")
-        y, _sr = librosa.load(str(arquivo), sr=sr, mono=True)
-        vec = extrair_features_completas(y, _sr)
-        duration_sec = float(librosa.get_duration(y=y, sr=_sr))
-
-        # Hints do sidecar .info.json (se existir) ou do nome do arquivo
-        artist_hint = track_hint = album_hint = yt_thumb = None
-        if youtube_meta is None:
-            side = arquivo.with_suffix(".info.json")
-            if side.exists():
-                try:
-                    youtube_meta = json.loads(side.read_text())
-                except Exception:
-                    youtube_meta = None
-        if youtube_meta:
-            artist_hint = youtube_meta.get("artist") or youtube_meta.get("uploader") or youtube_meta.get("channel")
-            track_hint  = youtube_meta.get("track")
-            album_hint  = youtube_meta.get("playlist_title")
-            thumbs = youtube_meta.get("thumbnails") or []
-            if isinstance(thumbs, list) and thumbs:
-                try:
-                    thumbs_sorted = sorted(thumbs, key=lambda d: (d.get("height",0), d.get("width",0)))
-                    yt_thumb = thumbs_sorted[-1].get("url")
-                except Exception:
-                    pass
-            if not track_hint:
-                t = youtube_meta.get("title") or arquivo.stem
-                a2, tr2, alb2 = _parse_title_tokens(t)
-                track_hint = tr2 or track_hint
-                if not artist_hint: artist_hint = a2
-                if not album_hint:  album_hint  = alb2
-        else:
-            a3, tr3, alb3 = _parse_title_tokens(arquivo.stem)
-            artist_hint, track_hint, album_hint = a3, tr3, alb3
-
-        # Metadados oficiais
-        meta_hints = {"artist": artist_hint, "title": track_hint, "album": album_hint, "thumb": yt_thumb}
-        log.info("🟢 Buscando metadados (Spotify → Discogs → Deezer → Shazam)…")
-        md = enrich_metadata(arquivo, duration_sec, meta_hints)
-        if not md["accepted"]:
-            log.warning(f"🔒 Sem metadados confiáveis para '{arquivo.name}'. Enfileirado em pendentes.csv.")
-            try:
-                pend = Path(__file__).resolve().parents[1] / "pendentes.csv"
-                with pend.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps({"arquivo":str(arquivo), "hints":meta_hints}, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            return
-
-        titulo  = md["title"]; artista = md["artist"]
-        album   = md["album"]; genero  = md["genres"]; capa = md["cover"]
-
-        # Decide link a salvar:
-        # - Se veio do YouTube (origem_link/webpage_url), mantém
-        # - Se é arquivo local, faz backfill **SIMPLES** (ytsearch1:)
-        link_final = (youtube_meta or {}).get("webpage_url") or origem_link
-        if link_final and _is_url(link_final):
-            link_final = _clean_link(link_final)
-            log.info(f"🔗 Link (origem YouTube): {link_final}")
-        else:
-            # consulta simples baseada nos metadados resolvidos;
-            # se título/artist não foram confiáveis, cai nos hints
-            title_q  = titulo if (titulo and titulo != arquivo.stem) else track_hint
-            artist_q = artista if (artista and artista.lower() != "desconhecido") else artist_hint
-
-            log.info("🔎 Backfill YouTube (simples yt_dlp/ytsearch1) …")
-            link = buscar_youtube_link(artist_q, title_q)
-            if link:
-                link_final = link
-                log.info(f"✅ Backfill YouTube: {link_final}")
-            else:
-                link_final = None
-                log.info("⚠️ Backfill YouTube: nenhum link encontrado.")
-
-        log.info("💾 Gravando no MySQL (tabela)…")
-        rid = upsert_musica(
-            nome=arquivo.name,
-            caracteristicas=vec,
-            artista=artista,
-            titulo=titulo,
-            album=album,
-            genero=genero,
-            capa_album=capa,
-            link_youtube=link_final,
+        rid = _SALVAR_FUN(
+            nome,
+            vetor,
+            meta.get("artista"),
+            meta.get("titulo"),
+            meta.get("album"),
+            meta.get("genero"),
+            meta.get("capa_album"),
+            meta.get("link_youtube"),
         )
-        log.info(f"✅ Indexado id={rid}  {arquivo.name}  →  {titulo} — {artista}")
+        return rid
+    except TypeError:
+        _SALVAR_FUN(
+            nome,
+            vetor,
+            meta.get("artista"),
+            meta.get("titulo"),
+            meta.get("album"),
+            meta.get("genero"),
+            meta.get("capa_album"),
+            meta.get("link_youtube"),
+        )
+        return None
 
-        if recomendar:
-            log.info("🤝 Gerando recomendações…")
-            recs = recomendar_por_audio(arquivo, k=k, sr=sr, excluir_nome=arquivo.name)
-            if not recs:
-                print("\nℹ️  Sem vizinhos suficientes ainda. Ingerir mais faixas ajuda.")
-            else:
-                _print_recs_pretty(recs)
 
-    except Exception as e:
-        log.error(f"❌ Falha ao processar '{arquivo}': {e}")
-        log.debug(traceback.format_exc())
-    finally:
+def _print_topk_pretty(recs: List[Dict[str, Any]]) -> None:
+    if not recs:
+        print("ℹ️  Sem recomendações.")
+        return
+    print("\n✨ Top 3 Recomendações Musicais ✨\n")
+    medalhas = ["🥇", "🥈", "🥉"]
+    for i, r in enumerate(recs[:3]):
+        barra_len = int(round((r.get("similaridade", 0.0) / 100.0) * 23))
+        barra = "█" * max(0, min(23, barra_len))
+        titulo = (r.get("titulo") or "—")[:58]
+        artista = (r.get("artista") or "—")[:57]
+        link = (r.get("caminho") or "—")[:60]
+        print("┌─{} Top {} ────────────────────────────────────────────────────────────┐".format(medalhas[i], i+1))
+        print("│ 🎵 Título: {:<58}│".format(titulo))
+        print("│ 🎤 Artista: {:<57}│".format(artista))
+        print("│ 📊 Similaridade: {:>6.2f}% [{:<23}] │".format(float(r.get("similaridade", 0.0)), barra))
+        print("│ 🔗 Link: {:<60}│".format(link))
+        print("└───────────────────────────────────────────────────────────────────────┘\n")
+
+
+# =====================================================================
+# yt-dlp resiliente (evita 429 e "not available on this app")
+# =====================================================================
+
+def _make_ydl_opts_base() -> Dict[str, Any]:
+    return {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "noplaylist": True,
+        "outtmpl": str(DOWNLOADS_DIR / "%(title)s-%(id)s.%(ext)s"),
+        "postprocessors": [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"},
+        ],
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 30,
+        "concurrent_fragment_downloads": 1,
+        "throttledratelimit": 1024 * 1024,  # 1MB/s para evitar estrangular
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+        "noprogress": True,
+    }
+
+
+def _make_ydl_opts_for_client(client: str, cookiefile: Optional[str] = None, is_playlist: bool = False) -> Dict[str, Any]:
+    opts = _make_ydl_opts_base()
+    exargs: Dict[str, Any] = {"youtube": {"player_client": [client]}}
+    if is_playlist:
+        exargs["youtubetab"] = {"skip": ["authcheck"]}
+        opts["yesplaylist"] = True
+        opts["noplaylist"] = False
+    opts["extractor_args"] = exargs
+
+    if cookiefile and Path(cookiefile).expanduser().exists():
+        opts["cookiefile"] = str(Path(cookiefile).expanduser())
+
+    # cabeçalhos ajudam em alguns cenários
+    opts["http_headers"] = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+    return opts
+
+
+def _download_single_video(link: str, clients: List[str], cookiefile: Optional[str] = None) -> Optional[Path]:
+    """Tenta baixar um único vídeo usando varios player_client e backoff em 429."""
+    max_attempts = len(clients) * 2  # 2 voltas na lista
+    attempt = 0
+    last_exc: Optional[Exception] = None
+
+    while attempt < max_attempts:
+        client = clients[attempt % len(clients)]
+        ydl_opts = _make_ydl_opts_for_client(client, cookiefile=cookiefile, is_playlist=False)
         try:
-            if AUTO_DELETE_DOWNLOADED:
-                try:
-                    is_download = Path(arquivo).resolve().is_relative_to(Path(DOWNLOADS_DIR).resolve())
-                except Exception:
-                    a_res = str(Path(arquivo).resolve()); d_res = str(Path(DOWNLOADS_DIR).resolve())
-                    is_download = a_res.startswith(d_res)
-                if is_download:
-                    side = Path(arquivo).with_suffix(".info.json")
-                    if side.exists(): side.unlink()
-                    if Path(arquivo).exists(): Path(arquivo).unlink()
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(link, download=True)
+                if not info:
+                    raise RuntimeError("Sem info retornada.")
+                fn = Path(ydl.prepare_filename(info))
+                cand = fn.with_suffix(".mp3")
+                if cand.exists():
+                    return cand
+                # fallback para m4a se o pós-processador falhar
+                m4a = fn.with_suffix(".m4a")
+                if m4a.exists():
+                    return m4a
+                # último recurso: o nome que o yt-dlp retornou
+                if fn.exists():
+                    return fn
+                raise RuntimeError("Arquivo final não encontrado após download.")
+        except Exception as e:
+            last_exc = e
+            msg = str(e)
+            # 429 → aguarda e tenta com próximo client
+            if "429" in msg or "Too Many Requests" in msg:
+                wait = 1.5 + random.random() * 2.0
+                print(f"⏳ 429 recebido (client={client}). Aguardando {wait:.1f}s e tentando outro client…")
+                time.sleep(wait)
+                attempt += 1
+                continue
+            # "not available on this app" → muda client imediatamente
+            if "not available on this app" in msg.lower():
+                print(f"🔁 Conteúdo indisponível no client '{client}'. Trocando de client…")
+                attempt += 1
+                continue
+            # outros erros → tenta próximo client rapidamente
+            print(f"⚠️  Falha com client '{client}': {msg}")
+            attempt += 1
+            time.sleep(0.5)
+
+    print(f"❌ Erro ao baixar (último erro): {last_exc}")
+    return None
+
+
+def _download_playlist(link: str, clients: List[str], cookiefile: Optional[str] = None) -> List[Path]:
+    """Baixa playlist tentando múltiplos clients e skip=authcheck. Retorna lista de arquivos baixados."""
+    baixados: List[Path] = []
+    last_exc: Optional[Exception] = None
+
+    for client in clients:
+        ydl_opts = _make_ydl_opts_for_client(client, cookiefile=cookiefile, is_playlist=True)
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(link, download=True)
+                entries = info.get("entries") if isinstance(info, dict) else None
+                if not entries:
+                    raise RuntimeError("Nenhuma entrada na playlist (pode precisar de auth).")
+                for e in entries:
+                    if not isinstance(e, dict):
+                        continue
+                    fn = Path(ydl.prepare_filename(e))
+                    cand = fn.with_suffix(".mp3")
+                    if cand.exists():
+                        baixados.append(cand)
+                    elif fn.exists():
+                        baixados.append(fn)
+                if baixados:
+                    return baixados
+        except Exception as e:
+            last_exc = e
+            msg = str(e)
+            if "429" in msg or "Too Many Requests" in msg:
+                wait = 1.5 + random.random() * 2.0
+                print(f"⏳ 429 na playlist (client={client}). Aguardando {wait:.1f}s e tentando outro client…")
+                time.sleep(wait)
+                continue
+            print(f"⚠️  Falha na playlist com client '{client}': {msg}")
+            continue
+
+    if not baixados and last_exc:
+        print(f"❌ Erro ao baixar playlist (último erro): {last_exc}")
+    return baixados
+
+
+# =====================================================================
+# Funções expostas ao menu
+# =====================================================================
+
+def processar_audio_local(caminho: str, sr: int = 22050, k_recs: int = 3, recomendar: bool = True) -> None:
+    """
+    Processa UM arquivo local:
+    - Extrai features
+    - Enriquece metadados (Spotify/Discogs/Deezer/Shazam) + busca YouTube
+    - Salva no DB
+    - (opcional) apaga o arquivo após ingestão
+    - Mostra top-3 recomendações (se recomendar=True)
+    """
+    p = Path(caminho).expanduser().resolve()
+    if not p.exists() or not p.is_file():
+        print(f"❌ Arquivo inválido: {p}")
+        return
+
+    print("🔧 Extraindo features…")
+    vetor = extrair_caracteristicas(str(p), sr=sr)
+    if vetor is None:
+        print("❌ Falha ao extrair características.")
+        return
+    if EXPECTED_FEATURE_LENGTH and len(vetor) != int(EXPECTED_FEATURE_LENGTH):
+        print(f"❌ Vetor com tamanho inesperado ({len(vetor)} != {EXPECTED_FEATURE_LENGTH}).")
+        return
+
+    artista_hint, titulo_hint = _parse_hints_from_filename(p.name)
+
+    print("🟢 Buscando metadados (Spotify → Discogs → Deezer → Shazam)…")
+    meta = _obter_metadados(p, artista_hint, titulo_hint)
+
+    if meta.get("link_youtube") in (None, "", str(p)):
+        meta["link_youtube"] = _buscar_youtube_link_simples(meta.get("artista", ""), meta.get("titulo", ""))
+
+    print("💾 Gravando no MySQL (tabela)…")
+    rid = _salvar_no_db(p.name, list(map(float, vetor)), meta)
+
+    rot_t = meta.get("titulo") or "?"
+    rot_a = meta.get("artista") or "?"
+    rid_txt = f"id={rid}" if rid is not None else "id=?"
+    print(f"✅ Indexado {rid_txt}  {p.name}  →  {rot_t} — {rot_a}")
+
+    if recomendar:
+        try:
+            print("🤝 Gerando recomendações…")
+            recs = recomendar_por_audio(p, k=k_recs, sr=sr, excluir_nome=p.name)
+            _print_topk_pretty(recs[:k_recs])
+        except Exception as e:
+            print(f"⚠️  Não foi possível gerar recomendações agora: {e}")
+
+    if DELETE_AUDIO_AFTER_INGEST:
+        try:
+            os.remove(str(p))
         except Exception:
             pass
 
-def processar_link_youtube(url: str, enriquecer: bool = True, recomendar: bool = True, sr: int = 22050) -> None:
-    items = baixar_audio_youtube(url, DOWNLOADS_DIR, playlist=False)
-    if not items:
-        log.warning("Nenhum arquivo baixado.")
-        return
-    for it in items:
-        link_individual = (it.get("meta") or {}).get("webpage_url") or url
-        processar_audio_local(it["path"], origem_link=link_individual, enriquecer=enriquecer, recomendar=recomendar, sr=sr, youtube_meta=it.get("meta"))
 
-def processar_playlist_youtube(url: str, enriquecer: bool = True, sr: int = 22050) -> None:
-    items = baixar_audio_youtube(url, DOWNLOADS_DIR, playlist=True)
-    if not items:
-        log.warning("Nenhum item baixado da playlist.")
+def processar_link_youtube(link: str,
+                           enriquecer: bool = True,
+                           recomendar: bool = True,
+                           k_recs: int = 3,
+                           sr: int = 22050) -> None:
+    """
+    Baixa UM link do YouTube com fallback de clients/cookies e processa como local.
+    Parâmetros 'enriquecer' e 'recomendar' mantidos por compatibilidade com o menu.
+    """
+    print("⬇️ Baixando do YouTube…")
+    cookiefile = COOKIEFILE_PATH
+    destino = _download_single_video(link, clients=YTDLP_CLIENT_SEQUENCE, cookiefile=cookiefile)
+
+    if not destino or not destino.exists():
+        print("❌ Erro ao baixar: não foi possível obter o áudio.")
         return
-    log.info(f"▶️ Playlist: {len(items)} itens baixados.")
-    for i, it in enumerate(items, 1):
-        log.info(f"[{i}/{len(items)}] {it['path'].name}")
-        link_individual = (it.get("meta") or {}).get("webpage_url") or url
-        processar_audio_local(it["path"], origem_link=link_individual, enriquecer=enriquecer, recomendar=False, sr=sr, youtube_meta=it.get("meta"))
-    log.info("✅ Playlist processada.")
+
+    # Processa o arquivo baixado
+    processar_audio_local(str(destino), sr=sr, k_recs=k_recs, recomendar=recomendar)
+
+
+def upload_em_massa(pasta: str, sr: int = 22050, k_recs: int = 3) -> None:
+    """Processa TODOS os áudios da pasta (sem recursão)."""
+    root = Path(pasta).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        print(f"❌ Pasta inválida: {root}")
+        return
+
+    arquivos = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in (".mp3", ".wav", ".m4a")]
+    if not arquivos:
+        print("ℹ️  Nenhum arquivo de áudio encontrado.")
+        return
+
+    total = len(arquivos)
+    for i, p in enumerate(sorted(arquivos), 1):
+        print(f"[{i}/{total}] {p.name}")
+        # em massa: recomendações deixam lento; setar recomendar=False
+        processar_audio_local(str(p), sr=sr, k_recs=k_recs, recomendar=False)
+
+
+def playlist_bulk(link_playlist: str, sr: int = 22050, k_recs: int = 3) -> None:
+    """
+    Baixa uma playlist do YouTube e ingere faixa a faixa.
+    Usa extractor_args para evitar o erro de authcheck e fallback de clients.
+    """
+    print("⬇️ Baixando playlist (pode demorar)…")
+    cookiefile = COOKIEFILE_PATH
+    baixados = _download_playlist(link_playlist, clients=YTDLP_CLIENT_SEQUENCE, cookiefile=cookiefile)
+
+    if not baixados:
+        print("Nenhum item baixado da playlist.")
+        return
+
+    print(f"▶️ Playlist: {len(baixados)} itens baixados.")
+    for idx, p in enumerate(baixados, 1):
+        print(f"[{idx}/{len(baixados)}] {p.name}")
+        processar_audio_local(str(p), sr=sr, k_recs=k_recs, recomendar=False)
+
+
+# === Alias para compatibilidade com o menu ===
+def processar_playlist_youtube(link: str, sr: int = 22050, k_recs: int = 3) -> None:
+    """Compat: alguns menus importam esse nome; delega para playlist_bulk()."""
+    return playlist_bulk(link, sr=sr, k_recs=k_recs)
+
+
+def listar_ultimos_itens(limite: int = 10) -> None:
+    """Lista os últimos itens do banco usando listar() do seu módulo DB, se existir."""
+    if _DB_LISTAR is None:
+        print("⚠️  Função 'listar' não está disponível no seu app_v4_new.database.db.")
+        return
+    try:
+        rows = _DB_LISTAR(limite=limite)
+    except TypeError:
+        rows = _DB_LISTAR(limite)
+    if not rows:
+        print("ℹ️  Nenhum registro encontrado.")
+        return
+
+    print("\nid | titulo                 | artista                | caminho/yt")
+    print("----+------------------------+------------------------+----------------------------")
+    for r in rows:
+        rid = r.get("id", "?") if isinstance(r, dict) else (r[0] if len(r) > 0 else "?")
+        t = r.get("titulo", "") if isinstance(r, dict) else (r[1] if len(r) > 1 else "")
+        a = r.get("artista", "") if isinstance(r, dict) else (r[2] if len(r) > 2 else "")
+        lnk = r.get("link_youtube", "") if isinstance(r, dict) else (r[3] if len(r) > 3 else "")
+        print(f"{rid:<3} | {t[:22]:<22} | {a[:22]:<22} | {lnk[:26]}")
+
 
 def recalibrar_e_recomendar(k: int = 3, sr: int = 22050) -> None:
-    log.info("🛠️  Reajustando padronizador por bloco (scaler)…")
+    """
+    Recalibra (reajusta o scaler por bloco) e, se o usuário quiser, recomenda por um arquivo local.
+    """
+    print("🛠️  Reajustando padronizador por bloco (scaler)…")
     Xs, ids, metas, scaler = preparar_base_escalada()
-    log.info(f"✅ Scalado {Xs.shape[0]} faixas x {Xs.shape[1]} dims.\n")
-    f = Path(input("Arquivo de áudio para recomendar (ou Enter para pular): ").strip() or "")
-    if f.exists():
-        recs = recomendar_por_audio(f, k=k, sr=sr, excluir_nome=f.name)
-        if recs: _print_recs_pretty(recs)
-        else: print("Nenhuma recomendação encontrada.")
+    if Xs.shape[0] >= 1:
+        print(f"✅ Scalado {Xs.shape[0]} faixas x {Xs.shape[1]} dims.")
+    else:
+        print("⚠️  Catálogo insuficiente para calibrar. Ingerir mais faixas e tentar novamente.")
+        return
+
+    path_str = input("\nArquivo de áudio para recomendar (ou Enter para pular): ").strip()
+
+    if not path_str:
+        print("➡️  Pulando recomendação por áudio. Você pode usar as opções 1/2/3 a qualquer momento.")
+        return
+
+    p = Path(path_str)
+    if not p.exists():
+        print(f"⚠️  Caminho não existe: '{p}'. Informe um arquivo .mp3/.wav válido.")
+        return
+    if not p.is_file():
+        print(f"⚠️  '{p}' é uma pasta. Informe um arquivo .mp3/.wav válido.")
+        return
+
+    try:
+        recs = recomendar_por_audio(p, k=k, sr=sr, excluir_nome=p.name)
+    except Exception as e:
+        print(f"❌ Erro ao recomendar por áudio: {e}")
+        return
+
+    if not recs:
+        print("ℹ️  Não foi possível calcular recomendações para este arquivo.")
+        return
+
+    _print_topk_pretty(recs[:k])
+
+
+def contar_musicas() -> int:
+    """
+    Conta quantas músicas existem no catálogo.
+    Preferência:
+      1) usa 'contar()' do seu módulo DB, se existir;
+      2) usa 'conectar()' e SELECT COUNT(*);
+      3) fallback: len(ids) de carregar_matriz().
+    """
+    if callable(_DB_CONTAR):
+        try:
+            n = int(_DB_CONTAR())
+            return n
+        except Exception:
+            pass
+
+    if callable(_DB_CONNECT):
+        try:
+            with _DB_CONNECT() as conn:
+                with conn.cursor() as cur:
+                    if EXPECTED_FEATURE_LENGTH:
+                        cur.execute(
+                            f"""
+                            SELECT COUNT(*) FROM {DB_TABLE_NAME}
+                            WHERE (LENGTH(caracteristicas) - LENGTH(REPLACE(caracteristicas, ',', ''))) + 1 = %s
+                            """,
+                            (int(EXPECTED_FEATURE_LENGTH),),
+                        )
+                    else:
+                        cur.execute(f"SELECT COUNT(*) FROM {DB_TABLE_NAME}")
+                    row = cur.fetchone()
+                    if row and row[0] is not None:
+                        return int(row[0])
+        except Exception:
+            pass
+
+    try:
+        X, ids, metas = carregar_matriz()
+        return int(len(ids)) if ids is not None else 0
+    except Exception:
+        return 0
