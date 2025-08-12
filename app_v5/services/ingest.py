@@ -5,12 +5,12 @@ from typing import Optional, Dict, Any, List
 import json, logging, traceback
 import librosa
 
-from app_v4_new.config import DOWNLOADS_DIR, COOKIEFILE_PATH, AUTO_DELETE_DOWNLOADED
-from app_v4_new.audio.extrator_fft import extrair_features_completas
-from app_v4_new.database.db import upsert_musica
-from app_v4_new.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
-from app_v4_new.services.metadata import enrich_metadata, _parse_title_tokens
-from app_v4_new.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
+from app_v4_audit.config import DOWNLOADS_DIR, COOKIEFILE_PATH, AUTO_DELETE_DOWNLOADED
+from app_v4_audit.audio.extrator_fft import extrair_features_completas
+from app_v4_audit.database.db import upsert_musica
+from app_v4_audit.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
+from app_v4_audit.services.metadata import enrich_metadata, _parse_title_tokens
+from app_v4_audit.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
 
 log = logging.getLogger("FourierMatch")
 
@@ -63,7 +63,7 @@ def contar_musicas() -> Optional[int]:
         from app_v4_new.config import DB_CONFIG, DB_TABLE_NAME
         with mysql.connector.connect(**DB_CONFIG) as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT COUNT(*) FROM {DB_TABLE_NAME}")
+                cur.execute(f"SELECT COUNT(*) FROM tb_musicas") #{DB_TABLE_NAME}
                 r = cur.fetchone()
                 return int(r[0]) if r else 0
     except Exception:
@@ -278,11 +278,50 @@ def processar_playlist_youtube(url: str, enriquecer: bool = True, sr: int = 2205
     log.info("✅ Playlist processada.")
 
 def recalibrar_e_recomendar(k: int = 3, sr: int = 22050) -> None:
-    log.info("🛠️  Reajustando padronizador por bloco (scaler)…")
+    """
+    Recalibra (reajusta o scaler por bloco) e, se o usuário quiser, recomenda por um arquivo local.
+    Corrigido: se o usuário só apertar Enter, PULA sem tentar abrir "."
+    """
+    print("🛠️  Reajustando padronizador por bloco (scaler)…")
     Xs, ids, metas, scaler = preparar_base_escalada()
-    log.info(f"✅ Scalado {Xs.shape[0]} faixas x {Xs.shape[1]} dims.\n")
-    f = Path(input("Arquivo de áudio para recomendar (ou Enter para pular): ").strip() or "")
-    if f.exists():
-        recs = recomendar_por_audio(f, k=k, sr=sr, excluir_nome=f.name)
-        if recs: _print_recs_pretty(recs)
-        else: print("Nenhuma recomendação encontrada.")
+    if Xs.shape[0] >= 1:
+        try:
+            print(f"✅ Scalado {Xs.shape[0]} faixas x {Xs.shape[1]} dims.")
+        except Exception:
+            # compat se Xs for lista/array-like
+            print(f"✅ Scalado {len(Xs)} faixas.")
+    else:
+        print("⚠️  Catálogo insuficiente para calibrar. Ingerir mais faixas e tentar novamente.")
+        return
+
+    # Pergunta opcional
+    try:
+        path_str = input("\nArquivo de áudio para recomendar (ou Enter para pular): ").strip()
+    except EOFError:
+        path_str = ""
+
+    # Se usuário apertar Enter, realmente pula
+    if not path_str:
+        print("➡️  Pulando recomendação por áudio. Você pode usar as opções 1/2/3 a qualquer momento.")
+        return
+
+    # Resolve caminho e valida
+    p = Path(path_str).expanduser()
+    # Trate ".", "./", pasta ou arquivo inexistente como 'pular'
+    if str(p) in (".", "./") or p.is_dir() or (not p.exists()):
+        print("⚠️  Caminho inválido (ou é uma pasta). Pulando recomendação por áudio.")
+        return
+
+    # Roda recomendação
+    try:
+        recs = recomendar_por_audio(p, k=k, sr=sr, excluir_nome=p.name)
+    except Exception as e:
+        print(f"❌ Erro ao recomendar por áudio: {e}")
+        return
+
+    if not recs:
+        print("ℹ️  Não foi possível calcular recomendações para este arquivo.")
+        return
+
+    _print_topk_pretty(recs[:k])
+

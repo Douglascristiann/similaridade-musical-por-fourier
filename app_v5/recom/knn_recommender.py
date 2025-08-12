@@ -70,27 +70,53 @@ def _cosine_sim_matrix(A: np.ndarray, b: np.ndarray) -> np.ndarray:
     return sims
 
 def recomendar_por_audio(path_audio, k: int = 3, sr: int = 22050, excluir_nome: str | None = None) -> List[Dict[str, Any]]:
-    import librosa, numpy as np
-    Xs, ids, metas, scaler = preparar_base_escalada()
-    if Xs.shape[0] == 0:
+    """
+    Gera recomendações a partir de um arquivo de áudio local.
+    Correções:
+      - Valida caminho (não tenta abrir diretório ".")
+      - Retorna [] silenciosamente se o arquivo não existir
+    """
+    from pathlib import Path
+    import librosa
+    import numpy as np
+
+    p = Path(path_audio).expanduser()
+    if str(p) in (".", "./") or (not p.exists()) or p.is_dir():
+        # nada a recomendar – evita erro 'IsADirectoryError: "."'
         return []
-    y, _sr = librosa.load(str(path_audio), sr=sr, mono=True)
+
+    # Base escalada (carrega matriz do banco e aplica scaler por blocos)
+    Xs, ids, metas, scaler = preparar_base_escalada()
+    if Xs is None or getattr(Xs, "shape", (0,))[0] == 0:
+        return []
+
+    # Extrai features do arquivo de consulta
+    try:
+        y, _sr = librosa.load(str(p), sr=sr, mono=True)
+    except Exception:
+        # Caso raro: tenta backend alternativo do librosa (audioread) já é usado automaticamente;
+        # se falhar, retornamos vazio para não quebrar fluxo do menu.
+        return []
+
     q = extrair_features_completas(y, _sr).reshape(1, -1)
 
-    # aplica scaler+pesos no vetor de consulta
+    # Aplica scaler por blocos + pesos
     if scaler:
         blocks = get_feature_blocks()
         for name, sl in blocks.items():
             if name in scaler:
-                mu = scaler[name]["mean"]; sd = scaler[name]["std"]
+                mu = scaler[name]["mean"]
+                sd = scaler[name]["std"]
                 q[:, sl] = (q[:, sl] - mu) / sd
                 w = float(BLOCK_WEIGHTS.get(name, 1.0))
                 q[:, sl] *= w
 
+    # Similaridade por cosseno
     sims = _cosine_sim_matrix(Xs, q[0])
     order = np.argsort(-sims)
 
-    recs = []
+    # Monta top-k
+    recs: List[Dict[str, Any]] = []
     for idx in order:
         meta = metas[idx]
         if excluir_nome and meta.get("nome") == excluir_nome:
