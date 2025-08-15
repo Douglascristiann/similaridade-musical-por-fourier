@@ -10,7 +10,7 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters
 )
 
-from app_v4_new.database.db import criar_tabela, upsert_usuario, upsert_nps
+from app_v5.database.db import criar_tabela, upsert_usuario, upsert_nps
 from .bridge import recommend_from_audio_file, recommend_from_youtube, list_db
 
 logging.basicConfig(level=logging.INFO)
@@ -184,7 +184,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN não definido (crie app_v4_new/integrations/.env ou exporte no ambiente)")
+        raise RuntimeError("BOT_TOKEN não definido (crie app_v5/integrations/.env ou exporte no ambiente)")
     app = Application.builder().token(BOT_TOKEN).build()
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
