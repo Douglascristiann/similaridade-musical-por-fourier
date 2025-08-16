@@ -4,7 +4,7 @@ import mysql.connector
 from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 
-from app_v4_audit.config import DB_CONFIG, DB_TABLE_NAME
+from app_v5.config import DB_CONFIG, DB_TABLE_NAME
 
 def conectar():
     return mysql.connector.connect(**DB_CONFIG)
