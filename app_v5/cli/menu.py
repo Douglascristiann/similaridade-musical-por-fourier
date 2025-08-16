@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 from typing import List
 
-from app_v5.config import APP_NAME, APP_VERSION, DOWNLOADS_DIR
+from app_v5.config import APP_NAME, APP_VERSION, DOWNLOADS_DIR, MUSIC_DIR
 from app_v5.database.db import listar
 from app_v5.services.ingest import (
     processar_audio_local, processar_link_youtube,
@@ -85,13 +85,15 @@ def _menu() -> str:
 def loop_interativo() -> None:
     while True:
         opc = _menu()
+
         if opc == "1":
-            c = Path(input("Arquivo de áudio: ").strip())
+            nome = input("Arquivo de áudio: ").strip().strip('"').strip("'")
+            c = (MUSIC_DIR / Path(nome).name).resolve()
             side = c.with_suffix(".info.json")
             meta = None
             try:
                 if side.exists():
-                    meta = json.loads(side.read_text())
+                    meta = json.loads(side.read_text(encoding="utf-8", errors="ignore"))
             except Exception:
                 pass
             processar_audio_local(c, enriquecer=True, recomendar=True, k=3, youtube_meta=meta)
@@ -101,22 +103,54 @@ def loop_interativo() -> None:
             processar_link_youtube(link, enriquecer=True, recomendar=True)
 
         elif opc == "3":
-            pasta = Path(input("Pasta local: ").strip())
-            arquivos = _discover_audio_paths(pasta, True)
-            if not arquivos:
-                print("Nenhum áudio encontrado.")
+            pasta = Path(MUSIC_DIR)
+            if not pasta.exists() or not pasta.is_dir():
+                print(f"⚠️  Diretório inválido: {pasta}")
             else:
-                for i, ap in enumerate(arquivos, 1):
-                    log.info(f"[{i}/{len(arquivos)}] {ap.name}")
-                    side = ap.with_suffix(".info.json")
-                    meta = None
-                    try:
-                        if side.exists():
-                            meta = json.loads(side.read_text())
-                    except Exception:
-                        pass
-                    processar_audio_local(ap, enriquecer=True, recomendar=False, youtube_meta=meta)
-                print("✅ Concluído.")
+                # tenta usar seu discover; se não existir, usa fallback recursivo
+                try:
+                    arquivos = _discover_audio_paths(pasta, True)  # True = recursivo
+                except NameError:
+                    arquivos = [p for p in pasta.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXTS]
+
+                total = len(arquivos)
+                print(f"📂 Pasta-alvo: {pasta}")
+                if total == 0:
+                    print(f"ℹ️  Nenhuma música encontrada (extensões aceitas: {', '.join(sorted(VALID_EXTS))}).")
+                else:
+                    print(f"🎵  Detectadas {total} música(s) para processar.")
+                    resp = input("Pressione Enter para continuar ou digite 0 para voltar ao menu: ").strip()
+                    if resp == "0":
+                        print("↩️  Voltando ao menu.")
+                    else:
+                        ok, falhas = 0, 0
+                        for i, ap in enumerate(arquivos, 1):
+                            try:
+                                # log se existir, senão print
+                                try:
+                                    log.info(f"[{i}/{total}] {ap.name}")
+                                except Exception:
+                                    print(f"[{i}/{total}] {ap.name}")
+
+                                # sidecar .info.json (opcional)
+                                side = ap.with_suffix(".info.json")
+                                meta = None
+                                if side.exists():
+                                    try:
+                                        meta = json.loads(side.read_text(encoding="utf-8", errors="ignore"))
+                                    except Exception:
+                                        meta = None
+
+                                processar_audio_local(ap, enriquecer=True, recomendar=False, youtube_meta=meta)
+                                ok += 1
+                            except Exception as e:
+                                falhas += 1
+                                try:
+                                    log.error(f"Falha em {ap}: {e}")
+                                except Exception:
+                                    print(f"❌ Falha em {ap}: {e}")
+
+                        print(f"✅ Concluído. Sucesso: {ok} | Falhas: {falhas}")
 
         elif opc == "4":
             recalibrar_e_recomendar(k=3)
@@ -134,11 +168,12 @@ def loop_interativo() -> None:
             if not rows:
                 print("Banco vazio.")
             else:
-                cols = [c for c in ("id","titulo","artista","caminho","created_at") if c in rows[0]]
+                cols = [c for c in ("id", "titulo", "artista", "caminho", "created_at") if c in rows[0]]
                 print(_format_table(rows, cols))
 
         elif opc == "0":
             print("👋 Até a próxima!")
             break
+
         else:
             print("❌ Opção inválida.")

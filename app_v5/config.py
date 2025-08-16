@@ -22,6 +22,7 @@ ROOT_DIR      = Path(__file__).resolve().parent
 DOWNLOADS_DIR = ROOT_DIR / "downloads"
 CACHE_DIR     = ROOT_DIR / "cache"
 COOKIEFILE_PATH = ROOT_DIR / "cache" / "cookies.txt"  # usado APENAS ao baixar do YouTube
+MUSIC_DIR = Path(os.getenv("MUSIC_DIR", ROOT_DIR.parent / "audio")).resolve()
 
 # Metadados externos (tokens/chaves)
 # → Discogs (crie em https://www.discogs.com/settings/developers)

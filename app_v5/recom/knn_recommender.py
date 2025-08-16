@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import List, Dict, Any, Tuple
-import numpy as np
 from pathlib import Path
+import numpy as np  # import no nível de módulo (não reatribuir)
 
 from app_v5.config import BLOCK_SCALER_PATH, BLOCK_WEIGHTS
 from app_v5.database.db import carregar_matriz
 from app_v5.audio.extrator_fft import extrair_features_completas, get_feature_blocks
 
+
+# ------------------------- Scaler por blocos ------------------------- #
 def _fit_block_scaler(X: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
+    """Calcula média/desvio por bloco de features e aplica proteção para std=0."""
     blocks = get_feature_blocks()
-    scaler = {}
+    scaler: Dict[str, Dict[str, np.ndarray]] = {}
     for name, sl in blocks.items():
         sub = X[:, sl]
         mu = np.nanmean(sub, axis=0)
@@ -19,41 +22,54 @@ def _fit_block_scaler(X: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
         scaler[name] = {"mean": mu, "std": sd}
     return scaler
 
+
 def _apply_block_scaler(X: np.ndarray, scaler: Dict[str, Dict[str, np.ndarray]]) -> np.ndarray:
+    """Aplica o scaler por blocos + pesos por bloco."""
     Xs = X.copy()
     blocks = get_feature_blocks()
     for name, sl in blocks.items():
-        if name not in scaler: 
+        info = scaler.get(name)
+        if not info:
             continue
-        mu = scaler[name]["mean"]; sd = scaler[name]["std"]
+        mu = info["mean"]
+        sd = info["std"]
         Xs[:, sl] = (Xs[:, sl] - mu) / sd
         # peso por bloco
         w = float(BLOCK_WEIGHTS.get(name, 1.0))
         Xs[:, sl] *= w
     return Xs
 
-def _save_scaler(scaler: Dict[str, Dict[str, np.ndarray]]):
+
+def _save_scaler(scaler: Dict[str, Dict[str, np.ndarray]]) -> None:
+    """Salva o scaler em um .npz (compactado)."""
     BLOCK_SCALER_PATH.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         BLOCK_SCALER_PATH,
         **{f"{k}_mean": v["mean"] for k, v in scaler.items()},
-        **{f"{k}_std":  v["std"]  for k, v in scaler.items()},
+        **{f"{k}_std": v["std"] for k, v in scaler.items()},
     )
 
+
 def _load_scaler() -> Dict[str, Dict[str, np.ndarray]] | None:
+    """Carrega o scaler do .npz, se existir."""
     if not Path(BLOCK_SCALER_PATH).exists():
         return None
     data = np.load(BLOCK_SCALER_PATH, allow_pickle=False)
-    scaler = {}
+    scaler: Dict[str, Dict[str, np.ndarray]] = {}
     for name in get_feature_blocks().keys():
         mkey, skey = f"{name}_mean", f"{name}_std"
         if mkey in data and skey in data:
             scaler[name] = {"mean": data[mkey], "std": data[skey]}
     return scaler
 
-def preparar_base_escalada() -> Tuple[np.ndarray, List[int], List[Dict[str,Any]], Dict]:
+
+def preparar_base_escalada() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]], Dict[str, Dict[str, np.ndarray]]]:
+    """
+    Carrega matriz do banco, ajusta (ou recarrega) scaler por blocos e devolve (Xs, ids, metas, scaler).
+    Nunca reatribui 'np' localmente (evita UnboundLocalError).
+    """
     X, ids, metas = carregar_matriz()
-    if X.shape[0] == 0:
+    if getattr(X, "shape", (0, 0))[0] == 0:
         return X, ids, metas, {}
     scaler = _load_scaler()
     if scaler is None:
@@ -62,72 +78,90 @@ def preparar_base_escalada() -> Tuple[np.ndarray, List[int], List[Dict[str,Any]]
     Xs = _apply_block_scaler(X, scaler)
     return Xs, ids, metas, scaler
 
+
+# ----------------------- Similaridade do cosseno ---------------------- #
 def _cosine_sim_matrix(A: np.ndarray, b: np.ndarray) -> np.ndarray:
-    # normaliza
+    """Versão vetorizada com 'np' global (mantida para compatibilidade)."""
     A_norm = np.linalg.norm(A, axis=1, keepdims=True) + 1e-9
     b_norm = np.linalg.norm(b) + 1e-9
-    sims = (A @ b) / (A_norm[:, 0] * b_norm)
-    return sims
+    return (A @ b) / (A_norm[:, 0] * b_norm)
 
+
+def _cosine_sim_local(x_mat, q_vec) -> "np.ndarray":
+    """
+    Similaridade do cosseno sem depender do símbolo global 'np'.
+    Usa um alias local 'np' para blindar contra qualquer uso acidental de 'np' como variável local.
+    """
+    import numpy as np  # alias local, nunca conflita com 'np'
+    X = np.asarray(x_mat, dtype=float)
+    q = np.asarray(q_vec, dtype=float).ravel()
+    denom = (np.linalg.norm(X, axis=1) + 1e-12) * (np.linalg.norm(q) + 1e-12)
+    return (X @ q) / denom
+
+
+# -------------------------- Recomendação KNN -------------------------- #
 def recomendar_por_audio(path_audio, k: int = 3, sr: int = 22050, excluir_nome: str | None = None) -> List[Dict[str, Any]]:
     """
     Gera recomendações a partir de um arquivo de áudio local.
-    Correções:
+
+    Blindagens:
       - Valida caminho (não tenta abrir diretório ".")
-      - Retorna [] silenciosamente se o arquivo não existir
+      - Evita qualquer dependência de 'np' local usando alias 'np' dentro da função
+      - Similaridade calculada por helper '_cosine_sim_local' (também com alias local)
     """
     from pathlib import Path
     import librosa
-    import numpy as np
+
 
     p = Path(path_audio).expanduser()
-    if str(p) in (".", "./") or (not p.exists()) or p.is_dir():
-        # nada a recomendar – evita erro 'IsADirectoryError: "."'
+    # evita abrir diretório "." ou caminhos inválidos
+    if str(p) in (".", "./") or p.is_dir() or (not p.exists()):
         return []
 
-    # Base escalada (carrega matriz do banco e aplica scaler por blocos)
+    # Base escalada
     Xs, ids, metas, scaler = preparar_base_escalada()
-    if Xs is None or getattr(Xs, "shape", (0,))[0] == 0:
+    n = getattr(Xs, "shape", (0,))[0] if Xs is not None else 0
+    if n == 0:
         return []
 
-    # Extrai features do arquivo de consulta
+    # Features do arquivo de consulta
     try:
         y, _sr = librosa.load(str(p), sr=sr, mono=True)
     except Exception:
-        # Caso raro: tenta backend alternativo do librosa (audioread) já é usado automaticamente;
-        # se falhar, retornamos vazio para não quebrar fluxo do menu.
         return []
 
     q = extrair_features_completas(y, _sr).reshape(1, -1)
 
-    # Aplica scaler por blocos + pesos
+    # Aplica scaler por blocos + pesos (alias local)
     if scaler:
         blocks = get_feature_blocks()
         for name, sl in blocks.items():
             if name in scaler:
-                mu = scaler[name]["mean"]
-                sd = scaler[name]["std"]
-                q[:, sl] = (q[:, sl] - mu) / sd
+                mu = np.asarray(scaler[name]["mean"], dtype=float)
+                sd = np.asarray(scaler[name]["std"], dtype=float)
+                q[:, sl] = (q[:, sl] - mu) / (sd + 1e-12)
                 w = float(BLOCK_WEIGHTS.get(name, 1.0))
                 q[:, sl] *= w
 
-    # Similaridade por cosseno
-    sims = _cosine_sim_matrix(Xs, q[0])
+    # Similaridade (à prova de conflitos com 'np')
+    sims = _cosine_sim_local(Xs, q[0])
     order = np.argsort(-sims)
 
     # Monta top-k
     recs: List[Dict[str, Any]] = []
     for idx in order:
-        meta = metas[idx]
+        i = int(idx)
+        meta = metas[i]
         if excluir_nome and meta.get("nome") == excluir_nome:
             continue
         recs.append({
-            "id": ids[idx],
+            "id": ids[i],
             "titulo": meta.get("titulo"),
             "artista": meta.get("artista"),
             "caminho": meta.get("caminho"),
-            "similaridade": float(sims[idx]),
+            "similaridade": float(sims[i]),
         })
         if len(recs) >= k:
             break
+
     return recs

@@ -89,15 +89,15 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
         with conn.cursor(dictionary=True) as cur:
             cur.execute(f"""
                 SELECT id, nome, caracteristicas, titulo, artista, link_youtube
-                  FROM tb_musicas
+                  FROM {DB_TABLE_NAME}
                  WHERE caracteristicas IS NOT NULL AND caracteristicas <> ''
             """)
             rows = cur.fetchall()
-#{DB_TABLE_NAME}
+
     ids, metas, feats = [], [], []
     for r in rows:
         try:
-            vec = [float(x) for x in (r["caracteristicas"].split(","))]
+            vec = [float(x) for x in r["caracteristicas"].split(",")]
             feats.append(vec)
             ids.append(int(r["id"]))
             metas.append({
@@ -110,7 +110,7 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
             continue
 
     if not feats:
-        import numpy as np
-        return np.zeros((0, 1)), [], []
+        return np.zeros((0, 1)), [], []   # ← usa o import de módulo (topo do arquivo)
+
     X = np.asarray(feats, dtype=float)
     return X, ids, metas
