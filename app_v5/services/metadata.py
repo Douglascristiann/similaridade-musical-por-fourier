@@ -11,13 +11,13 @@ from pathlib import Path
 import json, logging, re, unicodedata
 from difflib import SequenceMatcher
 
-from app_v4_new.config import DISCOGS_TOKEN, STRICT_METADATA, INSERT_ON_LOW_CONFIDENCE
+from app_v5.config import DISCOGS_TOKEN, STRICT_METADATA, INSERT_ON_LOW_CONFIDENCE
 
 # integrações (na mesma pasta de spotify.py)
-from app_v4_new.integrations.spotify import enrich_from_spotify
-from app_v4_new.integrations.discogs import search_discogs
-from app_v4_new.integrations.deezer  import search_deezer
-from app_v4_new.integrations.shazam_api import recognize_with_cache
+from app_v5.integrations.spotify import enrich_from_spotify
+from app_v5.integrations.discogs import search_discogs
+from app_v5.integrations.deezer  import search_deezer
+from app_v5.integrations.shazam_api import recognize_with_cache
 
 log = logging.getLogger("FourierMatch")
 
