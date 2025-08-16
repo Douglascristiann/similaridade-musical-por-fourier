@@ -4,9 +4,9 @@ from pathlib import Path
 import logging
 from typing import List
 
-from app_v4_audit.config import APP_NAME, APP_VERSION, DOWNLOADS_DIR
-from app_v4_audit.database.db import listar
-from app_v4_audit.services.ingest import (
+from app_v5.config import APP_NAME, APP_VERSION, DOWNLOADS_DIR
+from app_v5.database.db import listar
+from app_v5.services.ingest import (
     processar_audio_local, processar_link_youtube,
     processar_playlist_youtube, recalibrar_e_recomendar,
     contar_musicas

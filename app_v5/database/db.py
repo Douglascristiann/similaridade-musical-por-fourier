@@ -4,7 +4,7 @@ import mysql.connector
 from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 
-from app_v4_new.config import DB_CONFIG, DB_TABLE_NAME
+from app_v4_audit.config import DB_CONFIG, DB_TABLE_NAME
 
 def conectar():
     return mysql.connector.connect(**DB_CONFIG)
@@ -89,11 +89,11 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
         with conn.cursor(dictionary=True) as cur:
             cur.execute(f"""
                 SELECT id, nome, caracteristicas, titulo, artista, link_youtube
-                  FROM {DB_TABLE_NAME}
+                  FROM tb_musicas
                  WHERE caracteristicas IS NOT NULL AND caracteristicas <> ''
             """)
             rows = cur.fetchall()
-
+#{DB_TABLE_NAME}
     ids, metas, feats = [], [], []
     for r in rows:
         try:
