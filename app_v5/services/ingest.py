@@ -60,7 +60,7 @@ def _print_recs_pretty(recs: List[dict]) -> None:
 def contar_musicas() -> Optional[int]:
     try:
         import mysql.connector
-        from app_v4_new.config import DB_CONFIG, DB_TABLE_NAME
+        from app_v5.config import DB_CONFIG, DB_TABLE_NAME
         with mysql.connector.connect(**DB_CONFIG) as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT COUNT(*) FROM tb_musicas") #{DB_TABLE_NAME}
@@ -105,7 +105,7 @@ def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) 
         log.error("❌ yt-dlp não está instalado. Instale com:  pip install yt-dlp")
         return []
     pasta_destino.mkdir(parents=True, exist_ok=True)
-    from app_v4_new.config import COOKIEFILE_PATH
+    from app_v5.config import COOKIEFILE_PATH
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": str(pasta_destino / "%(title)s-%(id)s.%(ext)s"),

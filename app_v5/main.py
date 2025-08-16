@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Entry-point enxuto. Rode com:
-    python3 app_v4_new/main.py
+    python3 app_v5/main.py
 """
 import os, sys
 

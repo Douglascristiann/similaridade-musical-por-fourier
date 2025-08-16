@@ -9,7 +9,7 @@ import base64, time
 from typing import Optional, Dict, Any, List
 import requests
 
-from app_v4_new.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_MARKET
+from app_v5.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_MARKET
 
 _TOKEN_VAL: dict = {"access_token": None, "exp": 0.0}
 
