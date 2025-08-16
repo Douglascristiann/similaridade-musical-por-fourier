@@ -12,6 +12,7 @@ from app_v5.services.ingest import (
     contar_musicas
 )
 
+
 log = logging.getLogger("FourierMatch")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
