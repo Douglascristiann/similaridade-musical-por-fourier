@@ -4,9 +4,9 @@ from typing import List, Dict, Any, Tuple
 import numpy as np
 from pathlib import Path
 
-from app_v5.config import BLOCK_SCALER_PATH, BLOCK_WEIGHTS
-from app_v5.database.db import carregar_matriz
-from app_v5.audio.extrator_fft import extrair_features_completas, get_feature_blocks
+from app_v4_new.config import BLOCK_SCALER_PATH, BLOCK_WEIGHTS
+from app_v4_new.database.db import carregar_matriz
+from app_v4_new.audio.extrator_fft import extrair_features_completas, get_feature_blocks
 
 def _fit_block_scaler(X: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
     blocks = get_feature_blocks()

@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, List
 import requests
 
-from app_v5.config import DISCOGS_TOKEN
+from app_v4_new.config import DISCOGS_TOKEN
 
 def search_discogs(
     artist: Optional[str],

@@ -7,21 +7,21 @@ import librosa
 
 # ajustar path para rodar como módulo ou script
 ROOT = Path(__file__).resolve().parents[2]
-for p in (ROOT, ROOT / "app_v4_new"):
+for p in (ROOT, ROOT / "app_v5"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
 # config (v5 mantém config dentro do pacote)
 try:
-    from app_v4_new.config import DOWNLOADS_DIR
+    from app_v5.config import DOWNLOADS_DIR
 except Exception:
     from config import DOWNLOADS_DIR  # fallback raro
 
-from app_v4_new.main import baixar_audio_youtube              # v5 expõe esta função
-from app_v4_new.audio.extrator_fft import extrair_features_completas
-from app_v4_new.recognition.recognizer import recognize_with_cache
-from app_v4_new.database.db import upsert_musica, listar
-from app_v4_new.recom.knn_recommender import recomendar_por_audio
+from app_v5.services.ingest import baixar_audio_youtube              # v5 expõe esta função
+from app_v5.audio.extrator_fft import extrair_features_completas
+from app_v5.recognition.recognizer import recognize_with_cache
+from app_v5.database.db import upsert_musica, listar
+from app_v5.recom.knn_recommender import recomendar_por_audio
 
 log = logging.getLogger(__name__)
 

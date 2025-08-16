@@ -1,8 +1,11 @@
 from __future__ import annotations
 import asyncio, os, re, json, logging, tempfile
 from pathlib import Path
+import os
+import sys
 
-from dotenv import load_dotenv
+
+
 from pydub import AudioSegment
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -11,15 +14,25 @@ from telegram.ext import (
 )
 
 from app_v5.database.db import criar_tabela, upsert_usuario, upsert_nps
-from .bridge import recommend_from_audio_file, recommend_from_youtube, list_db
+from .bridge_telebot import recommend_from_audio_file, recommend_from_youtube, list_db
+import sys, pathlib
+from dotenv import load_dotenv
+
+if __package__ in (None, ""):
+    # Executado direto: python app_v5/integrations/menu_bot.py
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    from app_v5.integrations.env import * #TELEGRAM_TOKEN   ajuste se precisar de outros símbolos
+else:
+    # Executado como módulo: python -m app_v5.integrations.menu_bot
+    from .env import *
 
 logging.basicConfig(level=logging.INFO)
 
 # Carrega variáveis de ambiente da raiz e de integrations/.env (prioridade)
-load_dotenv()
-load_dotenv(Path(__file__).resolve().parent / ".env")
+# load_dotenv()
+# load_dotenv(Path(__file__).resolve().parent / ".env")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 K_DEFAULT = int(os.getenv("BOT_K", "3"))
 SR_DEFAULT = int(os.getenv("BOT_SR", "22050"))
 
@@ -183,9 +196,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Cancelado. Até mais! 👋"); return ConversationHandler.END
 
 def main():
-    if not BOT_TOKEN:
+    if not TELEGRAM_TOKEN:
         raise RuntimeError("BOT_TOKEN não definido (crie app_v5/integrations/.env ou exporte no ambiente)")
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={

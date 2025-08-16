@@ -5,12 +5,12 @@ from typing import Optional, Dict, Any, List
 import json, logging, traceback
 import librosa
 
-from app_v5.config import DOWNLOADS_DIR, COOKIEFILE_PATH, AUTO_DELETE_DOWNLOADED
-from app_v5.audio.extrator_fft import extrair_features_completas
-from app_v5.database.db import upsert_musica
-from app_v5.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
-from app_v5.services.metadata import enrich_metadata, _parse_title_tokens
-from app_v5.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
+from app_v4_audit.config import DOWNLOADS_DIR, COOKIEFILE_PATH, AUTO_DELETE_DOWNLOADED
+from app_v4_audit.audio.extrator_fft import extrair_features_completas
+from app_v4_audit.database.db import upsert_musica
+from app_v4_audit.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
+from app_v4_audit.services.metadata import enrich_metadata, _parse_title_tokens
+from app_v4_audit.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
 
 log = logging.getLogger("FourierMatch")
 
