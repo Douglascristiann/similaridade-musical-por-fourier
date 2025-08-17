@@ -11,6 +11,20 @@ import requests
 
 from app_v5.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_MARKET
 
+import os
+from dotenv import load_dotenv
+
+# Carrega .env da raiz (o load_dotenv padrão já procura ascendendo diretórios)
+load_dotenv()
+
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_MARKET = os.getenv("SPOTIFY_MARKET", "BR")
+
+if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+    raise RuntimeError("SPOTIFY_CLIENT_ID/SECRET não configurados (defina no .env ou no ambiente).")
+
+
 _TOKEN_VAL: dict = {"access_token": None, "exp": 0.0}
 
 def _get_token() -> Optional[str]:
@@ -100,6 +114,20 @@ def enrich_from_spotify(artist_hint: str|None, title_hint: str|None, album_hint:
     arts = ", ".join(a["name"] for a in best.get("artists", []))
     genres = []  # requer outra chamada na API do artista; omitimos por simplicidade
 
+        # ===== NOVO: extrai URL do Spotify da melhor faixa =====
+    sp_url = None
+    try:
+        eu = best.get("external_urls") or {}
+        sp_url = eu.get("spotify")
+        if not sp_url:
+            # fallback a partir da URI: spotify:track:<id>
+            uri = best.get("uri")
+            if isinstance(uri, str) and uri.startswith("spotify:track:"):
+                sp_url = "https://open.spotify.com/track/" + uri.split(":")[-1]
+    except Exception:
+        sp_url = None
+
+    
     accepted = (best_s >= 0.62)
     return {
         "accepted": accepted,
@@ -108,5 +136,6 @@ def enrich_from_spotify(artist_hint: str|None, title_hint: str|None, album_hint:
         "artist": arts,
         "album": alb.get("name"),
         "cover": cover,
-        "genres": genres
+        "genres": genres,
+        "link_spotify": sp_url,
     }

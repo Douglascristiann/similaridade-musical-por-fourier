@@ -86,7 +86,7 @@ def _merge_meta(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
     """Mescla título, artista, álbum, capa, gêneros (em string, coma-separada)."""
     if not src:
         return
-    for pair in [("title","title"), ("artist","artist"), ("album","album"), ("cover","cover")]:
+    for pair in [("title","title"), ("artist","artist"), ("album","album"), ("cover","cover"), ("link_spotify","link_spotify"),]:
         _merge_field(dst, src, pair[0], pair[1])
     # gêneros podem vir como list -> string
     g = src.get("genres")
@@ -121,6 +121,7 @@ def enrich_metadata(arquivo: Path, duration_sec: float, hints: Dict[str, Any]) -
         "album": None,
         "cover": yt_thumb or None,      # se tiver thumb do YT, já entra como candidato
         "genres": None,
+        "link_spotify": None,
     }
 
     # ---------- 1) Spotify ----------
@@ -218,5 +219,6 @@ def enrich_metadata(arquivo: Path, duration_sec: float, hints: Dict[str, Any]) -
         "album":   meta.get("album"),
         "genres":  meta.get("genres"),
         "cover":   meta.get("cover"),
+        "link_spotify": meta.get("link_spotify"),
         "accepted": accepted
     }

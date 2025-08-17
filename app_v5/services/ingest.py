@@ -14,6 +14,34 @@ from app_v5.services.youtube_backfill import buscar_youtube_link  # <<<<<< AQUI
 
 log = logging.getLogger("FourierMatch")
 
+def _formatar_links(meta: Dict[str, Any]) -> str:
+    sp = (meta.get("spotify") or meta.get("link_spotify") or "").strip()
+    yt = (meta.get("youtube") or meta.get("link_youtube") or "").strip()
+    cam = (meta.get("caminho") or "").strip()
+
+    def _is_spotify(u: str) -> bool:
+        return u.startswith("spotify:track:") or "open.spotify.com" in u
+
+    def _is_youtube(u: str) -> bool:
+        return ("youtube.com" in u) or ("youtu.be" in u)
+
+    # completa a partir de 'caminho' quando faltar
+    if cam:
+        if not sp and _is_spotify(cam):
+            sp = "https://open.spotify.com/track/" + cam.split(":")[-1] if cam.startswith("spotify:track:") else cam
+        if not yt and _is_youtube(cam):
+            yt = _clean_link(cam)
+
+    linhas = []
+    if sp:
+        linhas.append(f"🎧 Spotify: {sp}")
+    else:
+        linhas.append("🎧 Spotify: Não foi possível encontrar essa música no Spotify")
+    if yt:
+        linhas.append(f"▶️ YouTube: {yt}")
+
+    return "\n".join(linhas)
+
 def _bar_from_pct(pct: float, width: int = 20) -> str:
     pct = max(0.0, min(100.0, pct))
     fill = int(round(pct * width / 100.0))
@@ -54,7 +82,8 @@ def _print_recs_pretty(recs: List[dict]) -> None:
         print("│ " + (f"🎵 Título: {titulo}" ).ljust(box_w) + " │")
         print("│ " + (f"🎤 Artista: {artista}").ljust(box_w) + " │")
         print("│ " + (f"📊 Similaridade: {pct:.2f}% {bar}").ljust(box_w) + " │")
-        print("│ " + (f"🔗 Link: {link}"     ).ljust(box_w) + " │")
+        for ln in _formatar_links(r).splitlines():
+            print("│ " + ln.ljust(box_w) + " │")
         print(tail + "\n")
 
 def contar_musicas() -> Optional[int]:
@@ -227,6 +256,7 @@ def processar_audio_local(
             genero=genero,
             capa_album=capa,
             link_youtube=link_final,
+            link_spotify=md.get("link_spotify"),
         )
         log.info(f"✅ Indexado id={rid}  {arquivo.name}  →  {titulo} — {artista}")
 

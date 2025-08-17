@@ -44,9 +44,10 @@ def upsert_musica(
     genero: Optional[str],
     capa_album: Optional[str],
     link_youtube: Optional[str],
+    link_spotify: Optional[str],  # <<< NOVO
 ) -> int:
     """
-    Insere se não existir; caso exista, ATUALIZA todos os campos (inclui link_youtube).
+    Insere se não existir; caso exista, ATUALIZA todos os campos (inclui link_youtube e link_spotify).
     """
     vec_str = ",".join(str(float(x)) for x in caracteristicas.tolist())
     with conectar() as conn:
@@ -55,19 +56,19 @@ def upsert_musica(
             if rid is None:
                 cur.execute(f"""
                     INSERT INTO {DB_TABLE_NAME}
-                    (nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (nome, vec_str, artista, titulo, album, genero, capa_album, link_youtube))
+                    (nome, caracteristicas, artista, titulo, album, genero, capa_album, link_youtube, link_spotify)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (nome, vec_str, artista, titulo, album, genero, capa_album, link_youtube, link_spotify))
                 conn.commit()
                 rid = cur.lastrowid
             else:
                 cur.execute(f"""
                     UPDATE {DB_TABLE_NAME}
                        SET caracteristicas=%s,
-                           artista=%s, titulo=%s, album=%s, genero=%s,
-                           capa_album=%s, link_youtube=%s
+                           artista=%s, titulo=%s, album=%s, genero=%s, capa_album=%s,
+                           link_youtube=%s, link_spotify=%s
                      WHERE id=%s
-                """, (vec_str, artista, titulo, album, genero, capa_album, link_youtube, rid))
+                """, (vec_str, artista, titulo, album, genero, capa_album, link_youtube, link_spotify, rid))
                 conn.commit()
             return int(rid)
 
@@ -76,7 +77,7 @@ def listar(limit: int = 20) -> List[Dict[str, Any]]:
         with conn.cursor(dictionary=True) as cur:
             cur.execute(f"""
                 SELECT id, titulo, artista,
-                       COALESCE(link_youtube, '') AS caminho,
+                       COALESCE(link_spotify, link_youtube, '') AS caminho,
                        created_at
                   FROM {DB_TABLE_NAME}
               ORDER BY id DESC
@@ -88,7 +89,7 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
     with conectar() as conn:
         with conn.cursor(dictionary=True) as cur:
             cur.execute(f"""
-                SELECT id, nome, caracteristicas, titulo, artista, link_youtube
+                SELECT id, nome, caracteristicas, titulo, artista, link_youtube, link_spotify
                   FROM {DB_TABLE_NAME}
                  WHERE caracteristicas IS NOT NULL AND caracteristicas <> ''
             """)
@@ -97,20 +98,26 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
     ids, metas, feats = [], [], []
     for r in rows:
         try:
-            vec = [float(x) for x in r["caracteristicas"].split(",")]
+            vec = [float(x) for x in (r["caracteristicas"] or "").split(",") if x != ""]
+            if not vec:
+                continue
             feats.append(vec)
             ids.append(int(r["id"]))
             metas.append({
                 "nome": r["nome"],
                 "titulo": r.get("titulo"),
                 "artista": r.get("artista"),
-                "caminho": r.get("link_youtube"),
+                # Preferência: Spotify primeiro; se não tiver, usa o YouTube
+                "caminho": (r.get("link_spotify") or r.get("link_youtube")),
+                "spotify": r.get("link_spotify"),
+                "youtube": r.get("link_youtube"),
             })
         except Exception:
             continue
 
     if not feats:
-        return np.zeros((0, 1)), [], []   # ← usa o import de módulo (topo do arquivo)
+        return np.zeros((0, 1)), [], []
 
     X = np.asarray(feats, dtype=float)
     return X, ids, metas
+

@@ -154,12 +154,16 @@ def recomendar_por_audio(path_audio, k: int = 3, sr: int = 22050, excluir_nome: 
         meta = metas[i]
         if excluir_nome and meta.get("nome") == excluir_nome:
             continue
+        m = metas[i] or {}
         recs.append({
             "id": ids[i],
-            "titulo": meta.get("titulo"),
-            "artista": meta.get("artista"),
-            "caminho": meta.get("caminho"),
+            "titulo": m.get("titulo") or m.get("nome"),
+            "artista": m.get("artista"),
             "similaridade": float(sims[i]),
+            # mantém o 'caminho' compatível (Spotify > YouTube), mas agora leva os dois campos:
+            "caminho": (m.get("link_spotify") or m.get("spotify") or m.get("caminho") or m.get("link_youtube") or m.get("youtube")),
+            "spotify": (m.get("spotify") or m.get("link_spotify")),
+            "youtube": (m.get("youtube") or m.get("link_youtube")),
         })
         if len(recs) >= k:
             break
