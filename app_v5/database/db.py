@@ -23,6 +23,7 @@ def criar_tabela():
                     genero VARCHAR(255),
                     capa_album TEXT,
                     link_youtube TEXT NULL,
+                    link_spotify TEXT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
