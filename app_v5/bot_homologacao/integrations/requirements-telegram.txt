@@ -1,0 +1,6 @@
+python-telegram-bot>=21.0
+python-dotenv>=1.0
+pydub>=0.25
+ffmpeg-python>=0.2
+shazamio>=0.6.0
+aiohttp>=3.8
