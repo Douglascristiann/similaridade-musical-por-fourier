@@ -1,0 +1,1 @@
+python -m app_v5.integrations.menu_bot
