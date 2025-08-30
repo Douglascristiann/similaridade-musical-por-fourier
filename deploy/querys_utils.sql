@@ -5,6 +5,8 @@ use dbmusicadata;
 show tables;
 
 select * from tb_musicas;
+select	* from tb_nps;
+select * from tb_usuarios;
 
 ALTER TABLE tb_musicas
   ADD COLUMN link_spotify TEXT NULL AFTER link_youtube;
