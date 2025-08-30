@@ -15,7 +15,7 @@ Layout (total = 161):
 """
 from __future__ import annotations
 from typing import Dict, Tuple
-import numpy as np
+import numpy as _np
 import librosa
 import warnings
 
@@ -30,7 +30,7 @@ def _safe_tempo(y, sr):
         from librosa.feature.rhythm import tempo as _tempo
         t = _tempo(y=y, sr=sr, hop_length=_HOP, aggregate=None)
         if t is None or len(t) == 0:
-            return np.array([0.0])
+            return _np.array([0.0])
         return t
     except Exception:
         # Compat < 0.10
@@ -38,28 +38,28 @@ def _safe_tempo(y, sr):
             warnings.simplefilter("ignore")
             t = librosa.beat.tempo(y=y, sr=sr, hop_length=_HOP, aggregate=None)
         if t is None or len(t) == 0:
-            return np.array([0.0])
+            return _np.array([0.0])
         return t
 
-def _key_invariant_chroma(chroma: np.ndarray) -> np.ndarray:
+def _key_invariant_chroma(chroma: _np.ndarray) -> _np.ndarray:
     """Alinha chroma rotacionando para que o pico fique na posição 0 (tônica comum)."""
     if chroma.ndim != 2 or chroma.shape[0] != 12:
         return chroma
     mean = chroma.mean(axis=1)
-    k = int(np.argmax(mean))
-    return np.roll(chroma, -k, axis=0)
+    k = int(_np.argmax(mean))
+    return _np.roll(chroma, -k, axis=0)
 
-def _summ_stats(mat: np.ndarray, use_std: bool = True) -> np.ndarray:
-    m = np.nanmean(mat, axis=1)
+def _summ_stats(mat: _np.ndarray, use_std: bool = True) -> _np.ndarray:
+    m = _np.nanmean(mat, axis=1)
     if use_std:
-        s = np.nanstd(mat, axis=1)
-        return np.concatenate([m, s], axis=0)
+        s = _np.nanstd(mat, axis=1)
+        return _np.concatenate([m, s], axis=0)
     return m
 
-def extrair_features_completas(y: np.ndarray, sr: int) -> np.ndarray:
+def extrair_features_completas(y: _np.ndarray, sr: int) -> _np.ndarray:
     # normalização básica de loudness
-    if np.max(np.abs(y)) > 1e-8:
-        y = y / np.max(np.abs(y))
+    if _np.max(_np.abs(y)) > 1e-8:
+        y = y / _np.max(_np.abs(y))
 
     # HPSS
     y_h, y_p = librosa.effects.hpss(y)
@@ -68,7 +68,7 @@ def extrair_features_completas(y: np.ndarray, sr: int) -> np.ndarray:
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=18, n_fft=_NFFT, hop_length=_HOP)
     d1   = librosa.feature.delta(mfcc, order=1)
     d2   = librosa.feature.delta(mfcc, order=2)
-    mfcc_stats = np.concatenate([
+    mfcc_stats = _np.concatenate([
         _summ_stats(mfcc, True),
         _summ_stats(d1,   True),
         _summ_stats(d2,   True)
@@ -89,35 +89,35 @@ def extrair_features_completas(y: np.ndarray, sr: int) -> np.ndarray:
 
     # Percussivo (y_p)
     zcr = librosa.feature.zero_crossing_rate(y=y_p, hop_length=_HOP)
-    zcr_m, zcr_s = float(np.nanmean(zcr)), float(np.nanstd(zcr))
+    zcr_m, zcr_s = float(_np.nanmean(zcr)), float(_np.nanstd(zcr))
     cent = librosa.feature.spectral_centroid(y=y_p, sr=sr, n_fft=_NFFT, hop_length=_HOP)
     bw   = librosa.feature.spectral_bandwidth(y=y_p, sr=sr, n_fft=_NFFT, hop_length=_HOP)
     roll = librosa.feature.spectral_rolloff(y=y_p, sr=sr, n_fft=_NFFT, hop_length=_HOP)
     flat = librosa.feature.spectral_flatness(y=y_p, n_fft=_NFFT, hop_length=_HOP)
-    percussive_stats = np.array([
+    percussive_stats = _np.array([
         zcr_m, zcr_s,
-        float(np.nanmean(cent)),
-        float(np.nanmean(bw)),
-        float(np.nanmean(roll)),
-        float(np.nanmean(flat)),
+        float(_np.nanmean(cent)),
+        float(_np.nanmean(bw)),
+        float(_np.nanmean(roll)),
+        float(_np.nanmean(flat)),
     ], dtype=float)  # 6
 
     # Ritmo
     tempo_seq = _safe_tempo(y_p, sr)
-    tempo_bpm = float(np.nanmedian(tempo_seq)) if tempo_seq.size else 0.0
-    tempo_var = float(np.nanvar(tempo_seq))    if tempo_seq.size else 0.0
+    tempo_bpm = float(_np.nanmedian(tempo_seq)) if tempo_seq.size else 0.0
+    tempo_var = float(_np.nanvar(tempo_seq))    if tempo_seq.size else 0.0
     onset_env = librosa.onset.onset_strength(y=y_p, sr=sr, hop_length=_HOP)
-    onset_mean = float(np.nanmean(onset_env)) if onset_env.size else 0.0
+    onset_mean = float(_np.nanmean(onset_env)) if onset_env.size else 0.0
     # tempogram “centro” simplificado
     try:
         tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr, hop_length=_HOP)
-        tg_centroid = float(np.nanmean(librosa.feature.spectral_centroid(S=tg)))
+        tg_centroid = float(_np.nanmean(librosa.feature.spectral_centroid(S=tg)))
     except Exception:
         tg_centroid = 0.0
-    ritmo = np.array([tempo_bpm, tempo_var, onset_mean, tg_centroid], dtype=float)  # 4
+    ritmo = _np.array([tempo_bpm, tempo_var, onset_mean, tg_centroid], dtype=float)  # 4
 
     # Concat final
-    vec = np.concatenate([
+    vec = _np.concatenate([
         mfcc_stats,         # 108
         chroma_stats,       # 24  -> 132
         tonnetz_stats,      # 12  -> 144
