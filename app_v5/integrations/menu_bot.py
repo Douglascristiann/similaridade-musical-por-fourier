@@ -121,8 +121,8 @@ def _rating_kb():
 
 def _algvote_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Alg A", callback_data="alg:A"),
-         InlineKeyboardButton("Alg B", callback_data="alg:B"),
+        [InlineKeyboardButton("Esta plataforma", callback_data="alg:A"),
+         InlineKeyboardButton("Outro streaming", callback_data="alg:B"),
          InlineKeyboardButton("Empate", callback_data="alg:=")]
     ])
 
@@ -150,8 +150,10 @@ async def safe_edit(q, text: str, **kwargs):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabela()  # garante tb_usuarios / tb_nps etc.
     await update.message.reply_text(
-        "👋 Olá! Bem-vindo(a) ao FourierMatch.\n\n"
-        "Para começar, qual é o seu nome completo?"
+        "🎵 Bem-vindo ao FourierMatch!.\n\n"
+	"Aqui você encontra músicas parecidas de verdade!.\n"
+	"Nosso sistema entende a melodia e as frequências do som para recomendar faixas que combinam com o que você curte — muito além do “quem ouviu isso 	também ouviu aquilo.\n\n"
+        "👇🏼Para começar, qual é o seu nome completo?👇🏼"
     )
     return REGISTER_NAME
 
@@ -415,7 +417,7 @@ async def handle_rating_callback(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         await safe_edit(q, f"⚠️ Erro ao salvar avaliação: {e}")
 
-    await q.message.reply_text("Se fosse escolher, qual algoritmo te agradou mais?", reply_markup=_algvote_kb())
+    await q.message.reply_text("Se fosse escolher, qual plataforma te agradou mais?", reply_markup=_algvote_kb())
     return GET_ALG
 
 async def handle_algvote_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
