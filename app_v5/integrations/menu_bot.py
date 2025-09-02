@@ -126,6 +126,11 @@ def _algvote_kb():
          InlineKeyboardButton("Empate", callback_data="alg:=")]
     ])
 
+# ---------- Preferência de identificador do usuário ----------
+def _user_ref(context: ContextTypes.DEFAULT_TYPE):
+    """Retorna o identificador preferencial do usuário para o DB (id AI; fallback: email)."""
+    return context.user_data.get("user_pk") or context.user_data.get("email")
+
 # ---------- Util: edição resiliente ----------
 async def safe_edit(q, text: str, **kwargs):
     """
@@ -151,8 +156,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     criar_tabela()  # garante tb_usuarios / tb_nps etc.
     await update.message.reply_text(
         "🎵 Bem-vindo ao FourierMatch!.\n\n"
-	"Aqui você encontra músicas parecidas de verdade!.\n"
-	"Nosso sistema entende a melodia e as frequências do som para recomendar faixas que combinam com o que você curte — muito além do “quem ouviu isso 	também ouviu aquilo.\n\n"
+        "Aqui você encontra músicas parecidas de verdade!.\n"
+        "Nosso sistema entende a melodia e as frequências do som para recomendar faixas que combinam com o que você curte — muito além do “quem ouviu isso \ttambém ouviu aquilo.\n\n"
         "👇🏼Para começar, qual é o seu nome completo?👇🏼"
     )
     return REGISTER_NAME
@@ -190,10 +195,11 @@ async def register_stream_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Feedback imediato para evitar timeout
     await safe_edit(q, "Processando cadastro…")
 
-    # Upsert no DB em executor (não bloqueia o bot)
+    # Upsert no DB em executor (não bloqueia o bot) — capturando o PK AI
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, upsert_usuario, user.id, fullname, email, pref)
+        pk = await loop.run_in_executor(None, upsert_usuario, None, fullname, email, pref)
+        context.user_data["user_pk"] = int(pk)  # ✅ guarda o id autoincrementado para uso futuro
     except Exception as e:
         await q.message.reply_text(f"⚠️ Erro ao salvar cadastro: {e}")
         await q.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb())
@@ -405,11 +411,18 @@ async def handle_rating_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not m:
         await safe_edit(q, "Entrada inválida.", reply_markup=_menu_kb()); return MENU
     rating = int(m.group(1))
-    user = update.effective_user
     payload = context.user_data.get("last_rate_payload") or {}
+
+    # Usa o id autoincrementado (ou email como fallback)
+    user_ref = _user_ref(context)
+    if not user_ref:
+        await safe_edit(q, "Não encontrei seu cadastro nesta sessão. Envie /start para cadastrar e poder avaliar.",
+                        reply_markup=_menu_kb())
+        return MENU
+
     try:
         upsert_nps(
-            user.id, int(payload.get("musica_id") or 0), rating,
+            user_ref, int(payload.get("musica_id") or 0), rating,
             channel=payload.get("channel"), input_ref=payload.get("input_ref"),
             result_json=json.dumps(payload.get("result_json") or {})
         )
@@ -426,9 +439,16 @@ async def handle_algvote_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m = re.match(r"^alg:(.+)$", q.data or "")
     choice = (m.group(1) if m else "=")
     payload = context.user_data.get("last_rate_payload") or {}
-    user = update.effective_user
+
+    # Usa o id autoincrementado (ou email como fallback)
+    user_ref = _user_ref(context)
+    if not user_ref:
+        await safe_edit(q, "Não encontrei seu cadastro nesta sessão. Envie /start para cadastrar e poder votar.",
+                        reply_markup=_menu_kb())
+        return MENU
+
     try:
-        update_nps_algoritmo(user.id, int(payload.get("musica_id") or 0), choice)
+        update_nps_algoritmo(user_ref, int(payload.get("musica_id") or 0), choice)
         await safe_edit(q, "👍 Voto registrado.")
     except Exception as e:
         await safe_edit(q, f"⚠️ Erro ao registrar: {e}")

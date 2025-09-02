@@ -1,39 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-app_v5.integrations.bridge (versão simples)
--------------------------------------------
-Fluxo idêntico ao da CLI para metadados:
-- usa app_v5.services.ingest.baixar_audio_youtube para baixar
-- usa app_v5.services.metadata.enrich_metadata para preencher título/artist/álbum/gênero/capa
-- usa app_v5.services.youtube_backfill.buscar_youtube_link como fallback de link quando for áudio local
-- grava via app_v5.database.db.upsert_musica (mesma assinatura do projeto)
-Sem descoberta dinâmica, sem aceitar ID puro: **exige link do YouTube** para a opção 2.
+app_v5.integrations.bridge (fluxo da CLI + fallback suave)
+- Usa exatamente o pipeline de metadados da CLI:
+  * services.ingest.baixar_audio_youtube
+  * services.metadata.enrich_metadata / _parse_title_tokens
+  * services.youtube_backfill.buscar_youtube_link
+- Grava via database.db.upsert_musica (assinatura do projeto, com link_spotify).
+- Se enrich_metadata não "aceitar" (accepted=False), NÃO aborta: preenche com heurísticas e segue.
+- Se quiser abortar como antes, defina BOT_STRICT_METADATA=1 no ambiente.
 """
 
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any, List
 import logging
+import os
 
 log = logging.getLogger(__name__)
 
-# ---------------- Config ----------------
+# -------- Flags de execução --------
+BOT_STRICT_METADATA = (os.getenv("BOT_STRICT_METADATA", "0").strip().lower() in {"1","true","yes","on"})
+
+# -------- Config --------
 try:
     from app_v5.config import DOWNLOADS_DIR, EXPECTED_FEATURE_LENGTH
 except Exception:
     DOWNLOADS_DIR = "./downloads"
     EXPECTED_FEATURE_LENGTH = 161
 
-# ---------------- Integração (mesmo fluxo da CLI) ----------------
+# -------- Integração (mesmo fluxo da CLI) --------
 from app_v5.services.ingest import baixar_audio_youtube
 from app_v5.services.metadata import enrich_metadata, _parse_title_tokens
 from app_v5.services.youtube_backfill import buscar_youtube_link
 
-# ---------------- DB/Recomendador ----------------
-from app_v5.database.db import upsert_musica, listar
+# -------- DB / Recomendador --------
+from app_v5.database.db import upsert_musica, listar  # upsert_musica inclui link_spotify na assinatura  # :contentReference[oaicite:1]{index=1}
 from app_v5.recom.knn_recommender import recomendar_por_audio, preparar_base_escalada
 
-# ---------------- Features ----------------
+# -------- Features --------
 try:
     from app_v5.audio.extrator_fft import extrair_features_completas
 except Exception:
@@ -72,12 +76,13 @@ def _fmt_pct(sim: float) -> str:
 # ===================== ingest core (CLI-like) =====================
 def _ingest_with_cli_metadata(arquivo: Path, *, youtube_meta: Dict[str, Any] | None, sr: int) -> Dict[str, Any]:
     """
-    Reproduz o fluxo do services/ingest.processar_audio_local, mas retornando um dict adequado ao bot.
-    - Extrai features
-    - Monta hints de metadados a partir do YouTube (se houver) ou do nome do arquivo
-    - Resolve metadados via services.metadata.enrich_metadata
-    - Decide link_youtube final (origem ou backfill simples)
-    - Grava no catálogo via upsert_musica
+    Replica o fluxo da CLI:
+      1) extrai features
+      2) monta hints (YouTube -> _parse_title_tokens)
+      3) resolve metadados via enrich_metadata
+      4) decide link_youtube
+      5) grava via upsert_musica
+    Se 'accepted' vier False, aplica fallback suave (não aborta, a menos que BOT_STRICT_METADATA=1).
     """
     if not arquivo.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {arquivo}")
@@ -87,22 +92,23 @@ def _ingest_with_cli_metadata(arquivo: Path, *, youtube_meta: Dict[str, Any] | N
     vec = _extract_features(y, _sr)
     duration_sec = float(librosa.get_duration(y=y, sr=_sr))
 
-    # 2) hints (iguais ao CLI)
-    yt_title = yt_uploader = yt_thumb = None
+    # 2) hints
+    yt_title = yt_uploader = yt_thumb = yt_url = None
     artist_hint = track_hint = album_hint = None
 
     if youtube_meta:
         yt_title = (youtube_meta.get("title") or "").strip() or None
         yt_uploader = (youtube_meta.get("uploader") or youtube_meta.get("channel") or "").strip() or None
-        # thumbnails → pega a última (geralmente maior)
-        yt_thumb = (youtube_meta.get("thumbnail") or None)
-        if not yt_thumb:
-            thumbs = youtube_meta.get("thumbnails") or []
-            if thumbs and isinstance(thumbs, list):
-                try:
-                    yt_thumb = sorted(thumbs, key=lambda t: t.get("preference", 0))[-1].get("url")
-                except Exception:
-                    yt_thumb = thumbs[-1].get("url")
+        yt_url = (youtube_meta.get("webpage_url") or "").strip() or None
+
+        thumbs = youtube_meta.get("thumbnails") or []
+        if youtube_meta.get("thumbnail"):
+            yt_thumb = youtube_meta["thumbnail"]
+        elif thumbs and isinstance(thumbs, list):
+            try:
+                yt_thumb = sorted(thumbs, key=lambda t: t.get("preference", 0))[-1].get("url")
+            except Exception:
+                yt_thumb = thumbs[-1].get("url")
 
         a, t, alb = _parse_title_tokens(yt_title or "")
         artist_hint = a or yt_uploader
@@ -116,26 +122,40 @@ def _ingest_with_cli_metadata(arquivo: Path, *, youtube_meta: Dict[str, Any] | N
 
     meta_hints = {"artist": artist_hint, "title": track_hint, "album": album_hint, "thumb": yt_thumb}
 
-    # 3) resolve metadados oficiais (Spotify → Discogs → Deezer → Shazam)
-    md = enrich_metadata(arquivo, duration_sec, meta_hints)
-    if not md.get("accepted", False):
-        raise RuntimeError("Metadados não confiáveis para este áudio (STRICT_METADATA ativo).")
+    # 3) resolve metadados
+    md = {}
+    try:
+        md = enrich_metadata(arquivo, duration_sec, meta_hints) or {}
+    except Exception as e:
+        log.warning("enrich_metadata falhou (%s). Seguindo com fallback suave.", e)
+        md = {}
 
-    titulo  = md.get("title")
-    artista = md.get("artist")
-    album   = md.get("album")
-    genero  = md.get("genres")
-    capa    = md.get("cover")
+    accepted = bool(md.get("accepted"))
 
-    # 4) decide link a salvar (como na CLI)
-    link_final = (youtube_meta or {}).get("webpage_url") if youtube_meta else None
-    if not link_final:
-        # backfill simples (yt_dlp/ytsearch1)
-        title_q  = titulo if (titulo and titulo != arquivo.stem) else track_hint
-        artist_q = artista if (artista and artista.lower() != "desconhecido") else artist_hint
-        link_final = buscar_youtube_link(artist_q, title_q)
+    # 4) decisão de preenchimento (estrito x suave)
+    if accepted:
+        titulo  = md.get("title")
+        artista = md.get("artist")
+        album   = md.get("album")
+        genero  = md.get("genres")
+        capa    = md.get("cover")
+        link_sp = md.get("link_spotify")
+    else:
+        if BOT_STRICT_METADATA:
+            # Comportamento antigo (abortava o fluxo)
+            raise RuntimeError("Metadados não confiáveis para este áudio (STRICT_METADATA ativo).")
+        # Fallback SUAVE: usa o que tiver de md; completa com hints do YouTube/filename
+        titulo  = md.get("title")  or track_hint  or yt_title or arquivo.stem
+        artista = md.get("artist") or artist_hint or yt_uploader or "desconhecido"
+        album   = md.get("album")  or album_hint
+        genero  = md.get("genres")
+        capa    = md.get("cover")  or yt_thumb
+        link_sp = md.get("link_spotify")
 
-    # 5) grava no catálogo (mesma assinatura do projeto)
+    # 5) decide link a salvar
+    link_final = yt_url or buscar_youtube_link(artista, titulo)
+
+    # 6) grava no catálogo (ASSINATURA do seu db.py)
     rid = upsert_musica(
         nome=arquivo.name,
         caracteristicas=vec,
@@ -145,8 +165,8 @@ def _ingest_with_cli_metadata(arquivo: Path, *, youtube_meta: Dict[str, Any] | N
         genero=genero,
         capa_album=capa,
         link_youtube=link_final,
-        link_spotify=md.get("link_spotify"),
-    )  # assinatura com link_spotify está no seu db.py.  # :contentReference[oaicite:1]{index=1}
+        link_spotify=link_sp,
+    )  # upsert_musica espera link_spotify também.  # :contentReference[oaicite:2]{index=2}
 
     return {
         "id": rid,
@@ -157,6 +177,7 @@ def _ingest_with_cli_metadata(arquivo: Path, *, youtube_meta: Dict[str, Any] | N
         "capa_album": capa,
         "link": link_final or "",
         "caminho": str(arquivo),
+        "accepted": accepted
     }
 
 
