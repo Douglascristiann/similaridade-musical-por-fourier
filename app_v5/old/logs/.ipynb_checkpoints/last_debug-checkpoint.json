@@ -1,0 +1,107 @@
+{
+  "query_file": "/home/jovyan/work/audio/Spinnin' Records - Disturbed - The Sound Of Silence (CYRIL Remix) [Official Audio]-uIBJJ3M76Mg.mp3",
+  "strict_level": 1,
+  "metric": "euclidean",
+  "query_sem": {
+    "genre": "metal",
+    "bpm": null,
+    "year": 2024,
+    "mode": null
+  },
+  "top_k": 3,
+  "items": [
+    {
+      "id": 1421,
+      "titulo": "Disturbed - The Sound Of Silence -uIBJJ3M76Mg",
+      "artista": "Spinnin' Records",
+      "rank": 1,
+      "similaridade": 0.0,
+      "similaridade_oculta": true,
+      "caminho": "https://open.spotify.com/track/1LY3GhF0zxIVgbYEQjCbUO",
+      "spotify": "https://open.spotify.com/track/1LY3GhF0zxIVgbYEQjCbUO",
+      "youtube": "https://www.youtube.com/watch?v=jwptCxZI6y4",
+      "debug": {
+        "distance": 4.255345025116193e-09,
+        "base_score": 0.999999995744655,
+        "penalty_total": 0.0,
+        "reasons": [],
+        "cand_sem": {
+          "genre": "metal",
+          "bpm": null,
+          "year": null,
+          "mode": null
+        },
+        "final_like": 0.999999995744655,
+        "query_sem": {
+          "genre": "metal",
+          "bpm": null,
+          "year": 2024,
+          "mode": null
+        },
+        "strict_level": 1
+      }
+    },
+    {
+      "id": 816,
+      "titulo": "Sorte Grande",
+      "artista": "Ivete Sangalo",
+      "rank": 2,
+      "similaridade": 0.0,
+      "similaridade_oculta": true,
+      "caminho": "https://open.spotify.com/track/2IXiZtz7EVJpsyZwoxBy6K",
+      "spotify": "https://open.spotify.com/track/2IXiZtz7EVJpsyZwoxBy6K",
+      "youtube": "https://www.youtube.com/watch?v=q3mBv5VLeXU",
+      "debug": {
+        "distance": 5.47974897978446,
+        "base_score": 0.15432696592411266,
+        "penalty_total": 0.0,
+        "reasons": [],
+        "cand_sem": {
+          "genre": "rock",
+          "bpm": null,
+          "year": null,
+          "mode": null
+        },
+        "final_like": 0.15432696592411266,
+        "query_sem": {
+          "genre": "metal",
+          "bpm": null,
+          "year": 2024,
+          "mode": null
+        },
+        "strict_level": 1
+      }
+    },
+    {
+      "id": 1383,
+      "titulo": "A Cura (Ao Vivo)",
+      "artista": "Lulu Santos",
+      "rank": 3,
+      "similaridade": 0.0,
+      "similaridade_oculta": true,
+      "caminho": "https://open.spotify.com/track/4njyR80QqZZQsXd4Oh2L1i",
+      "spotify": "https://open.spotify.com/track/4njyR80QqZZQsXd4Oh2L1i",
+      "youtube": "https://www.youtube.com/watch?v=y-PKqtBiOD4",
+      "debug": {
+        "distance": 5.892233037006976,
+        "base_score": 0.1450908572926403,
+        "penalty_total": 0.0,
+        "reasons": [],
+        "cand_sem": {
+          "genre": "rock",
+          "bpm": null,
+          "year": null,
+          "mode": null
+        },
+        "final_like": 0.1450908572926403,
+        "query_sem": {
+          "genre": "metal",
+          "bpm": null,
+          "year": 2024,
+          "mode": null
+        },
+        "strict_level": 1
+      }
+    }
+  ]
+}

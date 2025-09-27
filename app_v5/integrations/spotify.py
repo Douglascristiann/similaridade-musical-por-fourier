@@ -1,141 +1,114 @@
 # -*- coding: utf-8 -*-
-"""
-Spotify Client Credentials: busca faixa e valida por duração/artista/título.
-Retorna dict:
-  { accepted: bool, title, artist, album, cover, genres, reason }
-"""
 from __future__ import annotations
-import base64, time
+import base64
+import time
+import os
+import re
 from typing import Optional, Dict, Any, List
 import requests
-
-from app_v5.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_MARKET
-
-import os
 from dotenv import load_dotenv
 
-# Carrega .env da raiz (o load_dotenv padrão já procura ascendendo diretórios)
 load_dotenv()
 
+# --- Configuração ---
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_MARKET = os.getenv("SPOTIFY_MARKET", "BR")
+# CORREÇÃO: URLs oficiais da API
+SPOTIFY_API_BASE_URL = "https://api.spotify.com"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 
 if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-    raise RuntimeError("SPOTIFY_CLIENT_ID/SECRET não configurados (defina no .env ou no ambiente).")
-
+    raise RuntimeError("As credenciais SPOTIFY_CLIENT_ID e SPOTIFY_CLIENT_SECRET não foram configuradas.")
 
 _TOKEN_VAL: dict = {"access_token": None, "exp": 0.0}
 
+# --- Funções de API ---
 def _get_token() -> Optional[str]:
     global _TOKEN_VAL
     now = time.time()
-    if _TOKEN_VAL["access_token"] and _TOKEN_VAL["exp"] > now + 30:
+    if _TOKEN_VAL.get("access_token") and _TOKEN_VAL.get("exp", 0) > now + 60:
         return _TOKEN_VAL["access_token"]
-    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+    
+    auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+    auth_bytes = base64.b64encode(auth_str.encode())
+    
+    try:
+        r = requests.post(
+           SPOTIFY_TOKEN_URL,
+           data={"grant_type": "client_credentials"},
+           headers={"Authorization": f"Basic {auth_bytes.decode()}"},
+           timeout=15
+        )
+        r.raise_for_status()
+        data = r.json()
+        _TOKEN_VAL["access_token"] = data.get("access_token")
+        _TOKEN_VAL["exp"] = time.time() + float(data.get("expires_in", 3600))
+        return _TOKEN_VAL["access_token"]
+    except requests.RequestException:
         return None
-    auth = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
-    r = requests.post(
-       "https://accounts.spotify.com/api/token",
-       data={"grant_type":"client_credentials"},
-       headers={"Authorization": f"Basic {auth}"}, timeout=15
-    )
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    _TOKEN_VAL["access_token"] = data.get("access_token")
-    _TOKEN_VAL["exp"] = time.time() + float(data.get("expires_in", 3600))
-    return _TOKEN_VAL["access_token"]
 
-def _search_track(q: str, market: str = "BR", limit: int = 5) -> List[dict]:
-    tok = _get_token()
-    if not tok: return []
-    r = requests.get(
-        "https://api.spotify.com/v1/search",
-        params={"q": q, "type": "track", "limit": limit, "market": market},
-        headers={"Authorization": f"Bearer {tok}"}, timeout=20
-    )
-    if r.status_code != 200:
-        return []
-    return (r.json().get("tracks") or {}).get("items") or []
+def _api_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    token = _get_token()
+    if not token: return None
+    try:
+        r = requests.get(
+            f"{SPOTIFY_API_BASE_URL}{endpoint}",
+            params=params, headers={"Authorization": f"Bearer {token}"}, timeout=20
+        )
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException:
+        return None
 
 def _ratio(a: str, b: str) -> float:
-    import unicodedata, re
     from difflib import SequenceMatcher
-    def norm(s: str) -> str:
-        s = unicodedata.normalize("NFKD", s or "")
-        s = "".join(c for c in s if not unicodedata.combining(c))
-        s = re.sub(r"[\[\(\{].*?[\]\)\}]", " ", s)
-        s = re.sub(r"\s+", " ", s).strip().lower()
-        return s
-    return SequenceMatcher(None, norm(a), norm(b)).ratio()
+    return SequenceMatcher(None, (a or "").lower(), (b or "").lower()).ratio()
 
-def enrich_from_spotify(artist_hint: str|None, title_hint: str|None, album_hint: str|None, duration_sec: float|None) -> Dict[str, Any]:
-    if not title_hint and not artist_hint:
+def enrich_from_spotify(artist_hint: str | None, title_hint: str | None, album_hint: str | None, duration_sec: float | None) -> Dict[str, Any]:
+    query = f"{artist_hint or ''} {title_hint or ''}".strip()
+    if not query:
         return {"accepted": False, "reason": "no_query"}
-    # Monta queries do mais restrito ao mais permissivo
-    queries = []
-    if artist_hint and title_hint and album_hint:
-        queries.append(f'track:"{title_hint}" artist:"{artist_hint}" album:"{album_hint}"')
-    if artist_hint and title_hint:
-        queries.append(f'track:"{title_hint}" artist:"{artist_hint}"')
-    if title_hint:
-        queries.append(f'track:"{title_hint}"')
-    if not queries:
-        queries.append(f'{artist_hint or ""} {title_hint or ""}'.strip())
 
-    items = []
-    for q in queries:
-        items = _search_track(q, market=SPOTIFY_MARKET, limit=5)
-        if items: break
+    search_result = _api_get("/v1/search", {"q": query, "type": "track", "limit": 5, "market": SPOTIFY_MARKET})
+    items = (search_result or {}).get("tracks", {}).get("items", [])
     if not items:
         return {"accepted": False, "reason": "no_results"}
 
-    # pick best
-    best, best_s = None, -1.0
-    for it in items:
-        tit = it.get("name") or ""
-        arts = ", ".join(a["name"] for a in it.get("artists", []))
-        dur_ms = int(it.get("duration_ms") or 0)
-        dur_ok = True
+    best_match, best_score = None, -1.0
+    for item in items:
+        score = _ratio(item.get("name"), title_hint)
         if duration_sec:
-            delta = abs(dur_ms/1000.0 - float(duration_sec))
-            dur_ok = (delta <= max(5.0, 0.08*max(dur_ms/1000.0, float(duration_sec))))
-        s = 0.6*_ratio(tit, title_hint or tit) + 0.4*_ratio(arts, artist_hint or arts)
-        if dur_ok and s > best_s:
-            best_s, best = s, it
+            delta = abs(item.get("duration_ms", 0) / 1000.0 - duration_sec)
+            if delta > 7.0: continue
+        if score > best_score:
+            best_match, best_score = item, score
 
-    if not best:
+    if not best_match or best_score < 0.6:
         return {"accepted": False, "reason": "no_match"}
 
-    alb = best.get("album") or {}
-    imgs = alb.get("images") or []
-    cover = imgs[0]["url"] if imgs else None
-    arts = ", ".join(a["name"] for a in best.get("artists", []))
-    genres = []  # requer outra chamada na API do artista; omitimos por simplicidade
+    track_id = best_match.get("id")
+    artist_id = (best_match.get("artists", [{}])[0]).get("id")
 
-        # ===== NOVO: extrai URL do Spotify da melhor faixa =====
-    sp_url = None
-    try:
-        eu = best.get("external_urls") or {}
-        sp_url = eu.get("spotify")
-        if not sp_url:
-            # fallback a partir da URI: spotify:track:<id>
-            uri = best.get("uri")
-            if isinstance(uri, str) and uri.startswith("spotify:track:"):
-                sp_url = "https://open.spotify.com/track/" + uri.split(":")[-1]
-    except Exception:
-        sp_url = None
-
+    features_data = _api_get(f"/v1/audio-features/{track_id}") if track_id else None
+    artist_data = _api_get(f"/v1/artists/{artist_id}") if artist_id else None
     
-    accepted = (best_s >= 0.62)
+    album_data = best_match.get("album", {})
+    release_date = album_data.get("release_date", "")
+    year = int(release_date.split('-')[0]) if release_date and release_date[0].isdigit() else None
+    
+    mode_val = (features_data or {}).get("mode")
+    mode = "major" if mode_val == 1 else "minor" if mode_val == 0 else None
+
     return {
-        "accepted": accepted,
-        "reason": "ok" if accepted else "low_score",
-        "title": best.get("name"),
-        "artist": arts,
-        "album": alb.get("name"),
-        "cover": cover,
-        "genres": genres,
-        "link_spotify": sp_url,
+        "accepted": True,
+        "title": best_match.get("name"),
+        "artist": ", ".join(a.get("name", "") for a in best_match.get("artists", [])),
+        "album": album_data.get("name"),
+        "cover": (album_data.get("images", [{}])[0]).get("url") if album_data.get("images") else None,
+        "genres": (artist_data or {}).get("genres", []),
+        "link_spotify": best_match.get("external_urls", {}).get("spotify"),
+        "bpm": (features_data or {}).get("tempo"),
+        "year": year,
+        "mode": mode,
     }
