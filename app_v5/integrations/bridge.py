@@ -30,7 +30,7 @@ except Exception:
 
 # -------- Integração (mesmo fluxo da CLI) --------
 from app_v5.services.ingest import baixar_audio_youtube
-from app_v5.services.metadata import enrich_metadata, _parse_title_tokens
+from app_v5.services.metadata import enrich_metadata, parse_title_tokens
 from app_v5.services.youtube_backfill import buscar_youtube_link
 
 # -------- DB / Recomendador --------
@@ -110,14 +110,14 @@ def _ingest_with_cli_metadata(arquivo: Path, *, youtube_meta: Dict[str, Any] | N
             except Exception:
                 yt_thumb = thumbs[-1].get("url")
 
-        a, t, alb = _parse_title_tokens(yt_title or "")
+        a, t, alb = parse_title_tokens(yt_title or "")
         artist_hint = a or yt_uploader
         track_hint  = t
         album_hint  = alb
         if not artist_hint:
             artist_hint = yt_uploader
     else:
-        a, t, alb = _parse_title_tokens(arquivo.stem)
+        a, t, alb = parse_title_tokens(arquivo.stem)
         artist_hint, track_hint, album_hint = a, t, alb
 
     meta_hints = {"artist": artist_hint, "title": track_hint, "album": album_hint, "thumb": yt_thumb}

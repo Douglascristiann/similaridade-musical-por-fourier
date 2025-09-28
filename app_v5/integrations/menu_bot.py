@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 from app_v5.database.db import (
-    criar_tabela, upsert_usuario, upsert_nps, update_nps_algoritmo, get_usuario
+    criar_tabela, upsert_usuario, upsert_nps, update_nps_algoritmo
 )
 from .bridge import (
     recommend_from_audio_file, recommend_from_youtube, list_db,
