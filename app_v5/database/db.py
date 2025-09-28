@@ -6,29 +6,22 @@ from typing import List, Tuple, Optional, Dict, Any, Union
 import numpy as np
 import mysql.connector
 import json
+import logging
 
-# +++ NOVO: para normalização (acentos/caixa/espaços)
-import unicodedata, re
+# Normalização (acentos/caixa/espaços) para duplicidade
+import unicodedata, re, ast
 
-# ... (mantenha as funções conectar, _select_id_by_nome, upsert_musica, e listar como estão)
 from app_v5.config import DB_CONFIG, DB_TABLE_NAME
+
+log = logging.getLogger("FourierMatch:DB")
 
 def conectar():
     """Estabelece conexão com o banco de dados."""
     return mysql.connector.connect(**DB_CONFIG)
 
-def _select_id_by_nome(nome: str) -> Optional[int]:
-    """Busca o ID de uma música pelo nome do arquivo."""
-    with conectar() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT id FROM {DB_TABLE_NAME} WHERE nome=%s LIMIT 1", (nome,))
-            r = cur.fetchone()
-            return int(r[0]) if r else None
-
 # =========================================================
-# NOVO: Normalização e checagem de duplicidade SEM schema
+# Normalização e checagem de duplicidade (sem alterar schema)
 # =========================================================
-
 _WS_RE = re.compile(r"\s+", flags=re.UNICODE)
 
 def _strip_accents_lower(s: str) -> str:
@@ -39,17 +32,25 @@ def _strip_accents_lower(s: str) -> str:
     return s
 
 def _norm_or_none(v: Optional[str]) -> Optional[str]:
-    if v is None: 
+    if v is None:
         return None
     v2 = str(v).strip()
     if not v2:
         return None
     return _strip_accents_lower(v2)
 
+def _select_id_by_nome(nome: str) -> Optional[int]:
+    """Busca o ID de uma música pelo nome do arquivo."""
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT id FROM {DB_TABLE_NAME} WHERE nome=%s LIMIT 1", (nome,))
+            r = cur.fetchone()
+            return int(r[0]) if r else None
+
 def musica_existe_por_meta(artist: Optional[str], title: Optional[str], album: Optional[str]) -> Optional[int]:
     """
     Procura música existente com mesmo (artista, título, álbum) ignorando acentos/caixa/espaços.
-    Retorna id se existir; senão, None. Não altera o schema do banco.
+    Retorna id se existir; senão, None.
     """
     na = _norm_or_none(artist)
     nt = _norm_or_none(title)
@@ -59,7 +60,6 @@ def musica_existe_por_meta(artist: Optional[str], title: Optional[str], album: O
 
     with conectar() as conn:
         with conn.cursor(dictionary=True) as cur:
-            # 1) Tenta collation acento-insensível (MySQL 8+)
             try:
                 cur.execute(
                     f"""
@@ -75,7 +75,6 @@ def musica_existe_por_meta(artist: Optional[str], title: Optional[str], album: O
                 )
                 rows = cur.fetchall()
             except Exception:
-                # 2) Fallback: case-insensitive; validação fina no Python
                 cur.execute(
                     f"""
                     SELECT id, artista, titulo, album
@@ -90,7 +89,6 @@ def musica_existe_por_meta(artist: Optional[str], title: Optional[str], album: O
                 )
                 rows = cur.fetchall()
 
-    # 3) Confirma normalizando em Python (remove acentos/colapsa espaços)
     for r in rows or []:
         ra = _norm_or_none(r.get("artista"))
         rt = _norm_or_none(r.get("titulo"))
@@ -110,7 +108,7 @@ def upsert_musica(
     link_youtube: Optional[str],
     link_spotify: Optional[str],
 ) -> int:
-    """Insere uma nova música ou atualiza uma existente com base no nome do arquivo."""
+    """Insere nova música ou atualiza existente com base no nome do arquivo."""
     vec = np.asarray(caracteristicas, dtype=float).ravel()
     vec_str = ",".join(str(float(x)) for x in vec.tolist())
 
@@ -150,15 +148,12 @@ def listar(limit: int = 20) -> List[Dict[str, Any]]:
             """, (int(limit),))
             return [dict(r) for r in cur.fetchall()]
 
-# ===== CORREÇÃO IMPORTANTE APLICADA AQUI =====
 def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
     """
     Carrega todas as músicas e seus metadados do banco para a memória.
-    Esta é a versão corrigida que garante o carregamento de todos os campos.
     """
     with conectar() as conn:
         with conn.cursor(dictionary=True) as cur:
-            # Seleciona todos os campos de metadados necessários do banco
             cur.execute(f"""
                 SELECT id, nome, caracteristicas, titulo, artista, album, genero, capa_album, link_youtube, link_spotify
                   FROM {DB_TABLE_NAME}
@@ -169,50 +164,45 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
     ids, metas, feats = [], [], []
     for r in rows:
         try:
-            # Converte a string de características em um vetor numérico
             vec = [float(x) for x in (r.get("caracteristicas") or "").split(",") if x]
             if not vec:
                 continue
-            
             feats.append(vec)
             ids.append(int(r["id"]))
-            
-            # Monta o dicionário de metadados, garantindo que todos os campos sejam incluídos
             metas.append({
                 "nome": r.get("nome"),
                 "titulo": r.get("titulo"),
                 "artista": r.get("artista"),
                 "album": r.get("album"),
-                "genero": r.get("genero"), # Campo crucial que estava faltando
+                "genero": r.get("genero"),
                 "capa_album": r.get("capa_album"),
                 "caminho": (r.get("link_spotify") or r.get("link_youtube")),
                 "spotify": r.get("link_spotify"),
                 "youtube": r.get("link_youtube"),
             })
         except (ValueError, TypeError):
-            # Ignora linhas com dados corrompidos
             continue
 
     if not feats:
         return np.array([]), [], []
-    
     return np.asarray(feats, dtype=float), ids, metas
 
-# ... (mantenha o restante do arquivo, incluindo as operações de Usuários e NPS, como está)
 # =============================================================
-# 2) OPERAÇÕES DE USUÁRIOS E NPS
+# 2) OPERAÇÕES DE USUÁRIOS E NPS (existentes) + MIGRAÇÃO USER TEST
 # =============================================================
-
 TB_USUARIOS = "tb_usuarios"
 TB_NPS      = "tb_nps"
 TB_MUSICAS  = "tb_musicas"
 
 def _tbl_exists(cur, table: str) -> bool:
-    cur.execute("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s", (DB_CONFIG.get("database"), table))
+    cur.execute("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
+                (DB_CONFIG.get("database"), table))
     return cur.fetchone() is not None
 
 def _get_pk_col_and_type(cur, table: str) -> Tuple[str, str]:
-    cur.execute("SELECT COLUMN_NAME, COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_KEY='PRI'", (DB_CONFIG.get("database"), table))
+    cur.execute("SELECT COLUMN_NAME, COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_KEY='PRI'",
+                (DB_CONFIG.get("database"), table))
     row = cur.fetchone()
     if not row:
         raise RuntimeError(f"Tabela '{table}' não tem PK detectável.")
@@ -223,7 +213,9 @@ def _index_exists(cur, table: str, index_name: str) -> bool:
     return cur.fetchone() is not None
 
 def _fk_exists(cur, table: str, fk_name: str) -> bool:
-    cur.execute("SELECT 1 FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=%s AND TABLE_NAME=%s AND CONSTRAINT_NAME=%s", (DB_CONFIG.get("database"), table, fk_name))
+    cur.execute("SELECT 1 FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS "
+                "WHERE CONSTRAINT_SCHEMA=%s AND TABLE_NAME=%s AND CONSTRAINT_NAME=%s",
+                (DB_CONFIG.get("database"), table, fk_name))
     return cur.fetchone() is not None
 
 def _ensure_fk(cur, table: str, fk_name: str, col: str, ref_table: str, ref_col: str):
@@ -234,14 +226,66 @@ def _ensure_fk(cur, table: str, fk_name: str, col: str, ref_table: str, ref_col:
             cur.execute(f"CREATE INDEX `idx_{col}` ON `{table}`(`{col}`)")
         except Exception:
             pass
-    cur.execute(f"ALTER TABLE `{table}` ADD CONSTRAINT `{fk_name}` FOREIGN KEY (`{col}`) REFERENCES `{ref_table}`(`{ref_col}`) ON DELETE CASCADE ON UPDATE CASCADE")
+    cur.execute(f"ALTER TABLE `{table}` "
+                f"ADD CONSTRAINT `{fk_name}` FOREIGN KEY (`{col}`) "
+                f"REFERENCES `{ref_table}`(`{ref_col}`) "
+                f"ON DELETE CASCADE ON UPDATE CASCADE")
+
+def _ensure_user_test_columns(cur):
+    """
+    Garante as colunas extras em tb_nps para armazenar:
+    - pares (event_type='pair'), com nota binária e Likert;
+    - NPS final da sessão (event_type='nps').
+    """
+    def _col_exists(table: str, col: str) -> bool:
+        cur.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME=%s",
+            (DB_CONFIG.get("database"), table, col)
+        )
+        return cur.fetchone() is not None
+
+    def _add_col(sql: str):
+        try:
+            cur.execute(sql)
+        except Exception:
+            # se já existir / sem permissão, silencie para seguir
+            pass
+
+    # Definições de coluna (sem IF NOT EXISTS)
+    if not _col_exists("tb_nps", "event_type"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN event_type ENUM('pair','nps') DEFAULT 'pair'")
+    if not _col_exists("tb_nps", "participant_id"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN participant_id VARCHAR(64) NULL")
+    if not _col_exists("tb_nps", "seed_id"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN seed_id INT NULL")
+    if not _col_exists("tb_nps", "seed_title"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN seed_title VARCHAR(255) NULL")
+    if not _col_exists("tb_nps", "cand_id"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN cand_id INT NULL")
+    if not _col_exists("tb_nps", "cand_title"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN cand_title VARCHAR(255) NULL")
+    if not _col_exists("tb_nps", "in_topk"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN in_topk TINYINT(1) NULL")
+    if not _col_exists("tb_nps", "user_sim"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN user_sim TINYINT(1) NULL")
+    if not _col_exists("tb_nps", "user_sim_score"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN user_sim_score TINYINT NULL")
+    if not _col_exists("tb_nps", "nps_score"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN nps_score TINYINT NULL")
+    if not _col_exists("tb_nps", "nps_comment"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN nps_comment TEXT NULL")
+    if not _col_exists("tb_nps", "created_at"):
+        _add_col("ALTER TABLE `tb_nps` ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP")
+
 
 def criar_tabela() -> None:
-    """Cria as tabelas de usuários e NPS se não existirem."""
+    """Cria as tabelas de usuários e NPS se não existirem + garante colunas do user test."""
     with conectar() as conn:
         with conn.cursor() as cur:
             if not _tbl_exists(cur, TB_MUSICAS):
                 raise RuntimeError(f"Tabela de músicas '{TB_MUSICAS}' não encontrada.")
+
             if not _tbl_exists(cur, TB_USUARIOS):
                 cur.execute(f"""
                     CREATE TABLE `{TB_USUARIOS}` (
@@ -253,7 +297,9 @@ def criar_tabela() -> None:
                         UNIQUE KEY `uk_users_email` (`email`)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """)
+
             mus_pk, mus_type = _get_pk_col_and_type(cur, TB_MUSICAS)
+
             if not _tbl_exists(cur, TB_NPS):
                 cur.execute(f"""
                     CREATE TABLE `{TB_NPS}` (
@@ -270,27 +316,19 @@ def criar_tabela() -> None:
                         UNIQUE KEY `uk_user_music` (`user_id`,`musica_id`)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """)
+
             _ensure_fk(cur, TB_NPS, "fk_nps_user", "user_id", TB_USUARIOS, "id")
             _ensure_fk(cur, TB_NPS, "fk_nps_music", "musica_id", TB_MUSICAS, mus_pk)
-            conn.commit()
 
-def upsert_usuario(_ignored_user_id: Optional[int], fullname: Optional[str], email: Optional[str], streaming_pref: Optional[str] = None) -> int:
-    if not email:
-        raise ValueError("email é obrigatório.")
-    with conectar() as conn:
-        with conn.cursor() as cur:
-            criar_tabela()
-            cur.execute(f"SELECT id FROM `{TB_USUARIOS}` WHERE email=%s LIMIT 1", (email,))
-            row = cur.fetchone()
-            if row:
-                pk = int(row[0])
-                # A lógica de update pode ser adicionada aqui se necessário
-                return pk
-            cur.execute(f"INSERT INTO `{TB_USUARIOS}` (fullname, email, streaming_pref) VALUES (%s, %s, %s)", (fullname, email, streaming_pref))
+            # 🔸 garante as colunas do estudo com usuário no MESMO tb_nps
+            _ensure_user_test_columns(cur)
+
             conn.commit()
-            return int(cur.lastrowid)
 
 def _resolve_user_pk(cur, user_ref: Union[int, str]) -> int:
+    """
+    Resolve o PK do usuário a partir de id inteiro ou email (string com '@').
+    """
     if isinstance(user_ref, int) or (isinstance(user_ref, str) and user_ref.isdigit()):
         cur.execute(f"SELECT id FROM `{TB_USUARIOS}` WHERE id=%s", (int(user_ref),))
     elif isinstance(user_ref, str) and "@" in user_ref:
@@ -302,6 +340,21 @@ def _resolve_user_pk(cur, user_ref: Union[int, str]) -> int:
         raise ValueError("Usuário não encontrado.")
     return int(r[0])
 
+def upsert_usuario(_ignored_user_id: Optional[int], fullname: Optional[str], email: Optional[str], streaming_pref: Optional[str] = None) -> int:
+    if not email:
+        raise ValueError("email é obrigatório.")
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            criar_tabela()
+            cur.execute(f"SELECT id FROM `{TB_USUARIOS}` WHERE email=%s LIMIT 1", (email,))
+            row = cur.fetchone()
+            if row:
+                return int(row[0])
+            cur.execute(f"INSERT INTO `{TB_USUARIOS}` (fullname, email, streaming_pref) VALUES (%s, %s, %s)",
+                        (fullname, email, streaming_pref))
+            conn.commit()
+            return int(cur.lastrowid)
+
 def upsert_nps(
     user_ref: Union[int, str],
     musica_id: int,
@@ -311,8 +364,9 @@ def upsert_nps(
     result_json: Optional[str] = None,
     alg_vencedor: Optional[str] = None
 ) -> Optional[int]:
-    if not 1 <= int(rating) <= 5:
-        raise ValueError("rating deve estar entre 1 e 5")
+    # Mantém a regra existente (0..5). Ajuste se desejar 0..10 aqui também.
+    if not 0 <= int(rating) <= 5:
+        raise ValueError("rating deve estar entre 0 e 5")
     with conectar() as conn:
         with conn.cursor() as cur:
             criar_tabela()
@@ -340,17 +394,119 @@ def update_nps_algoritmo(user_ref: Union[int, str], musica_id: int, choice: str)
     with conectar() as conn:
         with conn.cursor() as cur:
             fk_user = _resolve_user_pk(cur, user_ref)
-            cur.execute(f"UPDATE `{TB_NPS}` SET alg_vencedor=%s, updated_at=CURRENT_TIMESTAMP WHERE user_id=%s AND musica_id=%s", (choice, fk_user, int(musica_id)))
+            cur.execute(f"UPDATE `{TB_NPS}` SET alg_vencedor=%s, updated_at=CURRENT_TIMESTAMP "
+                        f"WHERE user_id=%s AND musica_id=%s", (choice, fk_user, int(musica_id)))
             conn.commit()
 
 # =============================================================
-# 3) FUNÇÕES PARA O SCRIPT DE BACKFILL
+# 3) FUNÇÕES do Teste com Usuário (lista cega)
 # =============================================================
+def fetch_random_negatives(qtd: int, excluir_ids: List[int]) -> List[Tuple[int, str, str, Optional[str], Optional[str]]]:
+    """
+    Retorna até `qtd` registros aleatórios fora de `excluir_ids`.
+    Colunas: id, titulo/nome, artista, link_spotify, link_youtube.
+    """
+    if qtd <= 0:
+        return []
+    placeholders = ",".join(["%s"] * len(excluir_ids)) if excluir_ids else "NULL"
+    where_exclude = f"WHERE id NOT IN ({placeholders})" if excluir_ids else ""
+    sql = f"""
+        SELECT id,
+               COALESCE(titulo, nome) AS titulo,
+               COALESCE(artista, '') AS artista,
+               COALESCE(link_spotify, '') AS link_spotify,
+               COALESCE(link_youtube, '') AS link_youtube
+        FROM {DB_TABLE_NAME}
+        {where_exclude}
+        ORDER BY RAND()
+        LIMIT %s
+    """
+    with conectar() as conn:
+        with conn.cursor(dictionary=True) as cur:
+            params: Tuple[Any, ...] = tuple(excluir_ids) + (qtd,) if excluir_ids else (qtd,)
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            out: List[Tuple[int, str, str, Optional[str], Optional[str]]] = []
+            for r in rows:
+                out.append((
+                    int(r["id"]),
+                    r.get("titulo") or "",
+                    r.get("artista") or "",
+                    r.get("link_spotify") or None,
+                    r.get("link_youtube") or None
+                ))
+            return out
 
+def inserir_user_test_pair(
+    participant_id: str,
+    seed_id: Optional[int],
+    seed_title: Optional[str],
+    cand_id: int,
+    cand_title: str,
+    in_topk: int,
+    user_sim: int,
+) -> int:
+    """
+    Registra um julgamento de par seed×candidata na tb_nps e retorna o ID da linha.
+    Usa event_type='pair'.
+    """
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            criar_tabela()
+            sql = """
+                INSERT INTO tb_nps
+                    (event_type, participant_id, seed_id, seed_title,
+                     cand_id, cand_title, in_topk, user_sim, created_at)
+                VALUES ('pair', %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            """
+            cur.execute(sql, (
+                participant_id, seed_id, seed_title,
+                cand_id, cand_title, in_topk, user_sim
+            ))
+            conn.commit()
+            return int(cur.lastrowid)
+def update_user_test_pair_score(row_id: int, user_sim_score: int) -> None:
+    """
+    Atualiza a mesma linha do par com a nota 1–5 de similaridade.
+    """
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tb_nps SET user_sim_score=%s WHERE id=%s AND event_type='pair'",
+                (int(user_sim_score), int(row_id))
+            )
+            conn.commit()
+
+
+def inserir_user_test_nps(
+    participant_id: str,
+    seed_id: Optional[int],
+    seed_title: Optional[str],
+    nps_score: int,
+    nps_comment: Optional[str]
+) -> None:
+    """
+    Registra o NPS final da sessão do teste com usuários (0..10).
+    Usa event_type='nps'.
+    """
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            criar_tabela()
+            sql = """
+                INSERT INTO tb_nps
+                    (event_type, participant_id, seed_id, seed_title,
+                     nps_score, nps_comment)
+                VALUES ('nps', %s, %s, %s, %s, %s)
+            """
+            cur.execute(sql, (
+                participant_id, seed_id, seed_title, int(nps_score), nps_comment
+            ))
+            conn.commit()
+
+# =============================================================
+# 4) BACKFILL de metadados (mantido)
+# =============================================================
 def fetch_musicas_sem_metadata(db_conn=None):
-    """
-    Busca músicas sem gênero ou álbum no banco de dados.
-    """
     conn = db_conn if db_conn else conectar()
     try:
         cursor = conn.cursor(dictionary=True)
@@ -364,18 +520,13 @@ def fetch_musicas_sem_metadata(db_conn=None):
         if not db_conn:
             conn.close()
 
-def update_metadata_musica(id_musica, novo_titulo, novo_artista, novo_album, novo_genero, nova_capa, novo_link_spotify, db_conn=None):
-    """
-    Atualiza os metadados de uma música específica pelo seu ID.
-    """
+def update_metadata_musica(id_musica: int, novo_titulo: Optional[str], novo_artista: Optional[str],
+                           novo_album: Optional[str], novo_genero: Optional[Any], nova_capa: Optional[str],
+                           novo_link_spotify: Optional[str], db_conn=None):
     conn = db_conn if db_conn else conectar()
     try:
         cursor = conn.cursor()
-        
-        # --- LINHA MODIFICADA ---
-        # Usa a nova função para formatar a lista de gêneros corretamente
         genero_str = _formatar_generos_para_db(novo_genero)
-        
         query = f"""
             UPDATE {DB_TABLE_NAME} SET
                 titulo = %s,
@@ -392,25 +543,29 @@ def update_metadata_musica(id_musica, novo_titulo, novo_artista, novo_album, nov
         if not db_conn:
             conn.close()
 
-#------------------------------------------------------------------------------------------
-import ast
-
-def _formatar_generos_para_db(genero_input: any) -> str | None:
+def _formatar_generos_para_db(genero_input: Any) -> Optional[str]:
     """
     Converte uma lista de gêneros ou a representação em string de uma lista
-    para uma única string separada por vírgulas.
+    para uma única string separada por vírgulas. Compatível com Python < 3.10.
     """
     if genero_input is None:
         return None
 
     lista_generos = genero_input
-    if isinstance(genero_input, str) and genero_input.startswith('[') and genero_input.endswith(']'):
+
+    # Se vier como string parecendo uma lista: "[...]", tenta fazer parse seguro
+    if isinstance(genero_input, str) and genero_input.strip().startswith('[') and genero_input.strip().endswith(']'):
         try:
             lista_generos = ast.literal_eval(genero_input)
         except (ValueError, SyntaxError):
-            return genero_input.strip("[]").replace("'", "").replace('"', '')
+            # fallback: remove colchetes e aspas sem quebrar
+            s = genero_input.strip("[]").replace("'", "").replace('"', '').strip()
+            return s or None
 
+    # Se for lista (de verdade), junta com vírgula
     if isinstance(lista_generos, list):
-        return ", ".join(map(str, lista_generos))
+        return ", ".join(str(x).strip() for x in lista_generos if str(x).strip())
 
-    return str(lista_generos)
+    # Qualquer outro tipo: retorna como string simples
+    s = str(lista_generos).strip()
+    return s if s else None
