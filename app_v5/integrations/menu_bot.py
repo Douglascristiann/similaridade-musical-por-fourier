@@ -156,6 +156,11 @@ def _nps_0_10_kb():
     row2 = [InlineKeyboardButton(str(i), callback_data=f"ut:nps:{i}") for i in range(6, 11)]  # 6..10
     return InlineKeyboardMarkup([row1, row2])
 
+def _skip_comment_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Pular comentário", callback_data="ut:nps_skip")]
+    ])
+
 
 def _fmt_list(items: List[Dict[str, Any]], titulo: str) -> str:
     # lista simples com bullets e link (se houver)
@@ -703,8 +708,13 @@ async def ut_nps_score_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "Entrada inválida."); return MENU
     nps_val = int(m.group(1))
     context.user_data["ut_nps_score"] = nps_val
-    await safe_edit(q, f"Valeu! Se quiser, deixe um comentário (opcional) sobre a experiência.\n\n"
-                       f"Digite sua mensagem aqui ou envie '-' para pular.")
+
+    await safe_edit(
+        q,
+        "Valeu! Se quiser, deixe um comentário (opcional) sobre a experiência.\n\n"
+        "Digite sua mensagem aqui ou toque em “Pular comentário”.",
+        reply_markup=_skip_comment_kb()
+    )
     return UT_NPS_COMMENT
 
 
@@ -735,7 +745,35 @@ async def ut_nps_comment_msg(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.pop("ut_nps_score", None)
     await update.message.reply_text("🎉 Obrigado por participar! Voltando ao menu.", reply_markup=_menu_kb())
     return MENU
+#---------------------------------
+async def ut_nps_skip_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
+    st = context.user_data.get("ut_state") or {}
+    try:
+        inserir_user_test_nps(
+            user_ref=_user_ref(context),
+            participant_id=st.get("participant_id") or "anon",
+            seed_id=st.get("seed_id"),
+            seed_title=st.get("seed_title"),
+            nps_score=int(context.user_data.get("ut_nps_score") or 0),
+            nps_comment=None  # sem comentário
+        )
+    except Exception as e:
+        log.warning("Falha ao gravar NPS do user test (skip): %s", e)
+
+    # limpar downloads e estado, depois voltar ao menu
+    _cleanup_downloads_dir()
+    context.user_data.pop("ut_state", None)
+    context.user_data.pop("ut_nps_score", None)
+
+    await safe_edit(q, "🎉 Obrigado por participar! Voltando ao menu.", reply_markup=_menu_kb())
+    return MENU
+
+
+
+#_--------------
 
 # ---------- Cancel & Error ----------
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
