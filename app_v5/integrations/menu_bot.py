@@ -9,6 +9,7 @@ import json
 import logging
 import tempfile
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
 from pydub import AudioSegment
@@ -22,8 +23,7 @@ from telegram.ext import (
 
 from app_v5.database.db import (
     criar_tabela, upsert_usuario, upsert_nps, update_nps_algoritmo,
-    fetch_random_negatives, inserir_user_test_pair, inserir_user_test_nps,
-    update_user_test_pair_score
+    fetch_random_negatives, inserir_user_test_pair, update_user_test_pair_score, inserir_user_test_nps
 )
 from .bridge import (
     recommend_from_audio_file, recommend_from_youtube, list_db,
@@ -34,15 +34,16 @@ from .shazam_flow import recognize_and_pick_youtube
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# Carrega variáveis de ambiente (ex.: BOT_TOKEN) do .env ao lado deste arquivo
+# Carrega variáveis de ambiente padrão (ex.: BOT_TOKEN) do .env ao lado deste arquivo
 load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
 
 # ---------- Estados ----------
 (
-    REGISTER_NAME, REGISTER_EMAIL, REGISTER_STREAM, MENU, GET_YT, GET_AUDIO, GET_SNIPPET,
-    GET_PLAYLIST, GET_RATING, GET_ALG,
-    UT_CONSENT, UT_VOTE, UT_LIKERT, UT_NPS, UT_COMMENT
-) = range(15)
+    REGISTER_NAME, REGISTER_EMAIL, REGISTER_STREAM, MENU,
+    GET_YT, GET_AUDIO, GET_SNIPPET, GET_PLAYLIST,
+    GET_RATING, GET_ALG,
+    UT_PAIR, UT_SCORE, UT_NPS_SCORE, UT_NPS_COMMENT
+) = range(14)
 
 K_DEFAULT = int(os.getenv("BOT_K", "3"))
 SR_DEFAULT = int(os.getenv("BOT_SR", "22050"))
@@ -64,7 +65,6 @@ CLI_MENU_TEXT = (
     "5) Playlist do YouTube (bulk)\n"
     "6) Listar últimos itens do banco\n"
     "7) Reconhecer trecho de áudio (Shazam)\n"
-    "8) Teste com usuário (lista cega)\n"
     "0) Sair"
 )
 
@@ -74,7 +74,6 @@ def _stream_kb():
     ])
 
 def _menu_kb():
-    # Espelha o menu com botões
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("1) Áudio local", callback_data="m_1"),
          InlineKeyboardButton("2) Link YouTube", callback_data="m_2")],
@@ -83,19 +82,21 @@ def _menu_kb():
         [InlineKeyboardButton("5) Playlist YouTube (bulk)", callback_data="m_5")],
         [InlineKeyboardButton("6) Listar últimos", callback_data="m_6")],
         [InlineKeyboardButton("7) Trecho (Shazam)", callback_data="m_7")],
-        [InlineKeyboardButton("8) Teste com usuário", callback_data="m_8")],
         [InlineKeyboardButton("0) Sair", callback_data="m_0")],
     ])
 
-# ---------- Formatadores (texto puro) ----------
+# ---------- Formatadores ----------
+def _best_link(item: Dict[str, Any]) -> str:
+    # item pode ser do resultado ou uma linha da tb_musicas
+    return item.get("link") or item.get("spotify") or item.get("youtube") or ""
+
 def _fmt_items_text(items: list[dict]) -> str:
-    """Renderiza recomendações em texto simples."""
     if not items:
         return "Nenhuma recomendação encontrada."
     lines = ["🎯 Recomendações:", ""]
     for i, it in enumerate(items, 1):
         sim = it.get("similaridade_fmt") or ""
-        link = it.get("link") or ""
+        link = _best_link(it)
         titulo = (it.get("titulo") or "").replace("\n", " ").strip()
         artista = (it.get("artista") or "").replace("\n", " ").strip()
         line = f"{i}. {titulo} — {artista} · {sim}"
@@ -105,7 +106,6 @@ def _fmt_items_text(items: list[dict]) -> str:
     return "\n".join(lines)
 
 def _fmt_table_rows_text(rows: list[dict]) -> str:
-    """Listagem simples de itens no banco."""
     cols = ["id", "titulo", "artista", "caminho", "created_at"]
     header = " | ".join(cols)
     sep = "-" * len(header)
@@ -121,8 +121,7 @@ def _fmt_table_rows_text(rows: list[dict]) -> str:
 
 def _rating_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ 0", callback_data="rate:0"),
-         InlineKeyboardButton("⭐ 1", callback_data="rate:1"),
+        [InlineKeyboardButton("⭐ 1", callback_data="rate:1"),
          InlineKeyboardButton("⭐ 2", callback_data="rate:2"),
          InlineKeyboardButton("⭐ 3", callback_data="rate:3"),
          InlineKeyboardButton("⭐ 4", callback_data="rate:4"),
@@ -136,45 +135,47 @@ def _algvote_kb():
          InlineKeyboardButton("Empate", callback_data="alg:=")]
     ])
 
-# ---------- Teclados do Teste com Usuário ----------
-def _kb_ut_consent():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("👍 Topo", callback_data="ut:consent:ok"),
-        InlineKeyboardButton("⏳ Agora não", callback_data="ut:consent:no"),
-    ]])
-
-def _kb_ut_yes_no_skip():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sim", callback_data="ut:sim"),
-        InlineKeyboardButton("❌ Não", callback_data="ut:nao"),
-        InlineKeyboardButton("⏭️ Pular", callback_data="ut:skip"),
-    ]])
-
-def _kb_ut_likert():
+def _yesno_kb(idx: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1", callback_data="ut:likert:1"),
-         InlineKeyboardButton("2", callback_data="ut:likert:2"),
-         InlineKeyboardButton("3", callback_data="ut:likert:3"),
-         InlineKeyboardButton("4", callback_data="ut:likert:4"),
-         InlineKeyboardButton("5", callback_data="ut:likert:5")],
-        [InlineKeyboardButton("⏭️ Pular", callback_data="ut:likert:skip")]
+        [InlineKeyboardButton("✅ Sim", callback_data=f"ut:pair:{idx}:1"),
+         InlineKeyboardButton("❌ Não", callback_data=f"ut:pair:{idx}:0")]
     ])
 
-def _kb_ut_nps():
-    row1 = [InlineKeyboardButton(str(i), callback_data=f"ut:nps:{i}") for i in range(0,6)]
-    row2 = [InlineKeyboardButton(str(i), callback_data=f"ut:nps:{i}") for i in range(6,11)]
+def _likert_1_5_kb(row_id: int):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1", callback_data=f"ut:score:{row_id}:1"),
+         InlineKeyboardButton("2", callback_data=f"ut:score:{row_id}:2"),
+         InlineKeyboardButton("3", callback_data=f"ut:score:{row_id}:3"),
+         InlineKeyboardButton("4", callback_data=f"ut:score:{row_id}:4"),
+         InlineKeyboardButton("5", callback_data=f"ut:score:{row_id}:5")]
+    ])
+
+def _nps_0_10_kb():
+    # Duas linhas para garantir que todos (0..10) apareçam em qualquer cliente
+    row1 = [InlineKeyboardButton(str(i), callback_data=f"ut:nps:{i}") for i in range(0, 6)]   # 0..5
+    row2 = [InlineKeyboardButton(str(i), callback_data=f"ut:nps:{i}") for i in range(6, 11)]  # 6..10
     return InlineKeyboardMarkup([row1, row2])
+
+
+def _fmt_list(items: List[Dict[str, Any]], titulo: str) -> str:
+    # lista simples com bullets e link (se houver)
+    lines = [f"*{titulo}*"]
+    for it in items:
+        t = (it.get("titulo") or "").strip()
+        a = (it.get("artista") or "").strip()
+        link = it.get("link") or ""
+        bullet = f"• {t} — {a}"
+        if link:
+            bullet += f"\n  {link}"
+        lines.append(bullet)
+    return "\n".join(lines)
 
 # ---------- Preferência de identificador do usuário ----------
 def _user_ref(context: ContextTypes.DEFAULT_TYPE):
-    """Retorna o identificador preferencial do usuário para o DB (id AI; fallback: email)."""
     return context.user_data.get("user_pk") or context.user_data.get("email")
 
 # ---------- Util: edição resiliente ----------
 async def safe_edit(q, text: str, **kwargs):
-    """
-    Tenta editar a mensagem do callback. Em caso de erro de rede, envia nova mensagem.
-    """
     try:
         return await q.edit_message_text(text, **kwargs)
     except RetryAfter as e:
@@ -190,12 +191,11 @@ async def safe_edit(q, text: str, **kwargs):
 
 # ---------- Fluxo de cadastro ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    criar_tabela()  # garante tb_usuarios / tb_nps etc.
+    criar_tabela()
     await update.message.reply_text(
         "🎵 Bem-vindo ao FourierMatch!\n\n"
-        "Aqui você encontra músicas parecidas de verdade!\n"
-        "Nosso sistema entende a melodia e as frequências do som para recomendar faixas que combinam com o que você curte.\n\n"
-        "👇🏼 Para começar, qual é o seu nome completo? 👇🏼"
+        "Aqui você encontra músicas parecidas de verdade.\n"
+        "👇🏼Para começar, qual é o seu nome completo?"
     )
     return REGISTER_NAME
 
@@ -233,7 +233,7 @@ async def register_stream_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     loop = asyncio.get_running_loop()
     try:
         pk = await loop.run_in_executor(None, upsert_usuario, None, fullname, email, pref)
-        context.user_data["user_pk"] = int(pk)  # guarda o id autoincrementado
+        context.user_data["user_pk"] = int(pk)
     except Exception as e:
         await q.message.reply_text(f"⚠️ Erro ao salvar cadastro: {e}")
         await q.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb())
@@ -243,7 +243,7 @@ async def register_stream_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await q.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb())
     return MENU
 
-# ---------- Menu (callbacks e texto numérico) ----------
+# ---------- Menu ----------
 async def menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -275,15 +275,6 @@ async def menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, _fmt_table_rows_text(rows), reply_markup=_menu_kb()); return MENU
     if data == "m_7":
         await safe_edit(q, "Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
-    if data == "m_8":
-        # Inicia Teste com Usuário (usa última recomendação feita)
-        await safe_edit(q,
-            "Vamos fazer um teste rápido de similaridade musical. Você topa participar? (leva ~3–5 min)\n\n"
-            "• Use **fone de ouvido**\n"
-            "• Você ouvirá 6 faixas (3 recomendadas + 3 fora da recomendação) e dirá se **soam similares** à música de referência (seed)\n",
-            parse_mode="Markdown",
-            reply_markup=_kb_ut_consent()
-        ); return UT_CONSENT
     if data == "m_0":
         await safe_edit(q, "Sessão encerrada. 👋"); return ConversationHandler.END
     await safe_edit(q, CLI_MENU_TEXT, reply_markup=_menu_kb())
@@ -318,20 +309,12 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(_fmt_table_rows_text(rows), reply_markup=_menu_kb()); return MENU
     if text == "7":
         await update.message.reply_text("Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
-    if text == "8":
-        await update.message.reply_text(
-            "Vamos fazer um teste rápido de similaridade musical. Você topa participar? (leva ~3–5 min)\n\n"
-            "• Use **fone de ouvido**\n"
-            "• Você ouvirá 6 faixas (3 recomendadas + 3 fora da recomendação) e dirá se **soam similares** à música de referência (seed)\n",
-            parse_mode="Markdown",
-            reply_markup=_kb_ut_consent()
-        ); return UT_CONSENT
     if text == "0" or text.lower() in {"sair","exit","quit"}:
         await update.message.reply_text("Sessão encerrada. 👋"); return ConversationHandler.END
-    await update.message.reply_text("Envie uma opção válida do menu (0..8) ou use os botões abaixo.", reply_markup=_menu_kb())
+    await update.message.reply_text("Envie uma opção válida do menu (0..7) ou use os botões abaixo.", reply_markup=_menu_kb())
     return MENU
 
-# ---------- Handlers de ações (YouTube/Áudio/Snippet/Playlist) ----------
+# ---------- Handlers principais ----------
 async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     if not text:
@@ -347,10 +330,7 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_rate_payload"] = {
         "musica_id": musica_id, "channel": "youtube", "input_ref": text, "result_json": r
     }
-    await update.message.reply_text(
-        "Como você avalia esse resultado? De 0 a 5 — 0 = nada provável ... 5 = extremamente provável.",
-        reply_markup=_rating_kb()
-    )
+    await update.message.reply_text("Como você avalia esse resultado? (1 a 5)", reply_markup=_rating_kb())
     return GET_RATING
 
 async def handle_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -359,8 +339,9 @@ async def handle_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Envie o link da playlist/álbum (YouTube)."); return GET_PLAYLIST
     await update.message.reply_text("⏳ Baixando itens da playlist e processando…")
     loop = asyncio.get_running_loop()
+    sr = SR_DEFAULT
     try:
-        r = await loop.run_in_executor(None, process_playlist_youtube, text, SR_DEFAULT)
+        r = await loop.run_in_executor(None, process_playlist_youtube, text, sr)
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao processar playlist: {e}", reply_markup=_menu_kb())
         return MENU
@@ -398,10 +379,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_rate_payload"] = {
         "musica_id": musica_id, "channel": "audio_local", "input_ref": q.get("caminho",""), "result_json": r
     }
-    await update.message.reply_text(
-        "Como você avalia esse resultado? De 0 a 5 — 0 = nada provável ... 5 = extremamente provável.",
-        reply_markup=_rating_kb()
-    )
+    await update.message.reply_text("Como você avalia esse resultado? (1 a 5)", reply_markup=_rating_kb())
     return GET_RATING
 
 async def handle_snippet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -452,25 +430,20 @@ async def handle_snippet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["last_rate_payload"] = {
                 "musica_id": musica_id, "channel": "snippet", "input_ref": target, "result_json": rec
             }
-            await msg.reply_text(
-                "Como você avalia esse resultado? De 0 a 5 — 0 = nada provável ... 5 = extremamente provável.",
-                reply_markup=_rating_kb()
-            )
+            await msg.reply_text("Como você avalia esse resultado? (1 a 5)", reply_markup=_rating_kb())
             return GET_RATING
         else:
             await msg.reply_text(f"❌ Erro ao recomendar: {rec.get('message')}", reply_markup=_menu_kb()); return MENU
     else:
         await msg.reply_text("❌ Não foi possível construir destino do YouTube.", reply_markup=_menu_kb()); return MENU
 
-# ---------- Pós-ação: coleta de NPS (0..5) e voto de algoritmo ----------
+# ---------- Pós-ação: NPS e voto + gatilho do Teste com Usuário ----------
 async def handle_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     m = re.match(r"^rate:(\d)$", q.data or "")
     if not m:
-        await safe_edit(q, "Entrada inválida.", reply_markup=_menu_kb()); 
-        return MENU
-
+        await safe_edit(q, "Entrada inválida.", reply_markup=_menu_kb()); return MENU
     rating = int(m.group(1))
     payload = context.user_data.get("last_rate_payload") or {}
 
@@ -486,6 +459,7 @@ async def handle_rating_callback(update: Update, context: ContextTypes.DEFAULT_T
             channel=payload.get("channel"), input_ref=payload.get("input_ref"),
             result_json=json.dumps(payload.get("result_json") or {})
         )
+        context.user_data["last_rating_value"] = int(rating)
         await safe_edit(q, "✅ Obrigado pela avaliação!")
     except Exception as e:
         await safe_edit(q, f"⚠️ Erro ao salvar avaliação: {e}")
@@ -494,9 +468,6 @@ async def handle_rating_callback(update: Update, context: ContextTypes.DEFAULT_T
     return GET_ALG
 
 async def handle_algvote_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Após o voto de plataforma: registra e INICIA automaticamente o Teste com Usuário (lista cega).
-    """
     q = update.callback_query
     await q.answer()
     m = re.match(r"^alg:(.+)$", q.data or "")
@@ -509,283 +480,264 @@ async def handle_algvote_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=_menu_kb())
         return MENU
 
+    musica_id = int((payload.get("musica_id") or 0))
+    last_rating = int(context.user_data.get("last_rating_value") or 3)
+    channel = payload.get("channel")
+    input_ref = payload.get("input_ref")
+    result_json = json.dumps(payload.get("result_json") or {})
+
     try:
-        update_nps_algoritmo(user_ref, int(payload.get("musica_id") or 0), choice)
+        # Upsert completo para garantir alg_vencedor na MESMA linha do seed
+        upsert_nps(
+            user_ref=user_ref,
+            musica_id=musica_id,
+            rating=last_rating,
+            channel=channel,
+            input_ref=input_ref,
+            result_json=result_json,
+            alg_vencedor=choice,
+        )
         await safe_edit(q, "👍 Voto registrado.")
-    except Exception as e:
-        await safe_edit(q, f"⚠️ Erro ao registrar: {e}")
-
-    # 🔁 Em vez de voltar ao menu, engata o Teste com Usuário
-    try:
-        await q.edit_message_reply_markup(None)
     except Exception:
-        pass
+        try:
+            update_nps_algoritmo(user_ref, musica_id, choice)
+            await safe_edit(q, "👍 Voto registrado.")
+        except Exception as e2:
+            await safe_edit(q, f"⚠️ Erro ao registrar voto: {e2}")
+            await q.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
 
-    await q.message.reply_text(
-        "Antes de finalizar, topa responder um teste rápido de similaridade? (leva ~3–5 min)\n\n"
-        "• Use **fone de ouvido**\n"
-        "• Você ouvirá 6 faixas (3 recomendadas + 3 fora da recomendação) e dirá se **soam similares** à música de referência (seed)\n",
-        parse_mode="Markdown",
-        reply_markup=_kb_ut_consent()
-    )
-    # NÃO limpar o last_rate_payload aqui — ele é usado como seed para a lista cega
-    return UT_CONSENT
+    # ---- Inicia fluxo do teste com usuário (Top-3 → depois 3 negativos) ----
+    await start_user_test_flow(update, context)
+    return UT_PAIR
 
-# ===================== Fluxo: Teste com usuário (lista cega) =====================
-async def ut_consent_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if (q.data or "") == "ut:consent:no":
-        await safe_edit(q, "Tudo bem! Quando quiser, é só voltar ao menu.", reply_markup=_menu_kb())
-        return MENU
-    if (q.data or "") != "ut:consent:ok":
-        await safe_edit(q, "Entrada inválida.", reply_markup=_menu_kb()); 
-        return MENU
-
-    # Precisa de uma recomendação feita antes (para usar Top-k atual)
-    payload = context.user_data.get("last_rate_payload")
-    if not payload or not isinstance(payload.get("result_json"), dict):
-        await safe_edit(q,
-            "⚠️ Para o teste, faça primeiro uma recomendação (opção 1, 2 ou 7).\n"
-            "Depois volte na opção 8) Teste com usuário.",
-            reply_markup=_menu_kb()
-        ); 
-        return MENU
-
-    res = payload["result_json"]
-    query = res.get("query") or {}
-    items = res.get("items") or []
-    if not items:
-        await safe_edit(q, "Não encontrei Top-k desta sessão. Gere uma recomendação e tente novamente.",
-                        reply_markup=_menu_kb()); 
-        return MENU
-
-    # === MONTA LISTA CEGA: Top-3 recomendadas + 3 negativas (com link) ===
-    k = min(3, len(items))
-    top = []
-    for it in items[:k]:
-        top.append({
-            "id": int(it.get("id") or 0),
-            "titulo": (it.get("titulo") or "").strip(),
-            "artista": (it.get("artista") or "").strip(),
-            "in_topk": 1,
-            "link": (it.get("link") or "").strip()
-        })
-
-    excl = [x["id"] for x in top] + ([int(query.get("id"))] if query.get("id") else [])
-    neg_raw = fetch_random_negatives(3, excluir_ids=excl)
-    negs = []
-    for (cid, t, a, link_sp, link_yt) in neg_raw:
-        negs.append({
-            "id": int(cid),
-            "titulo": t or "",
-            "artista": a or "",
-            "in_topk": 0,
-            "link": (link_sp or link_yt or "").strip()
-        })
-
-    blind = top + negs
-    import random as _rnd
-    _rnd.shuffle(blind)
-
-    # Guarda estado do teste
-    context.user_data["ut_state"] = {
-        "participant_id": f'U{update.effective_user.id}',
-        "seed_id": int(query.get("id") or 0) if query.get("id") else None,
-        "seed_title": f"{(query.get('titulo') or query.get('title') or 'Seed')}"
-                      f"{(' — ' + (query.get('artista') or '')) if (query.get('artista')) else ''}",
-        "items": blind,
-        "idx": 0,
-        "last_pair_row_id": None,
-        "awaiting_comment": False,
-        "nps_score": None
+# ---------- Fluxo do Teste com Usuário (duas fases) ----------
+def _seed_info_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    q = payload.get("result_json", {}).get("query") or {}
+    seed_title = f"{(q.get('titulo') or '').strip()} — {(q.get('artista') or '').strip()}".strip(" —")
+    return {
+        "seed_id": int(q.get("id") or 0),
+        "seed_title": seed_title,
     }
 
-    seed_title = context.user_data["ut_state"]["seed_title"] or "Seed"
-    await safe_edit(q, f"Seed: *{seed_title}*\nQuando estiver pronto, vamos começar!", parse_mode="Markdown")
-    return await ut_send_next(update, context)
+def _top3_from_result(result_json: Dict[str, Any]) -> List[Dict[str, Any]]:
+    items = result_json.get("items") or []
+    out = []
+    for it in items[:3]:
+        out.append({
+            "id": int(it.get("id") or 0),
+            "titulo": it.get("titulo") or "",
+            "artista": it.get("artista") or "",
+            "link": it.get("link") or "",
+            "in_topk": 1
+        })
+    return out
 
-async def ut_send_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = (update.effective_chat.id if update.effective_chat 
-               else update.callback_query.message.chat.id)
-    st = context.user_data.get("ut_state")
-    if not st:
-        await context.bot.send_message(chat_id, "Sessão de teste não encontrada. Volte ao menu.", reply_markup=_menu_kb())
+async def start_user_test_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prepara Top-3 (fase 1) e 3 negativos (fase 2). Mostra listas separadas."""
+    msg = update.effective_message
+    payload = context.user_data.get("last_rate_payload") or {}
+
+    # monta listas
+    seed = _seed_info_from_payload(payload)
+    rec_items = _top3_from_result(payload.get("result_json") or {})
+    excluir = [seed["seed_id"]] + [c["id"] for c in rec_items if c["id"]]
+    negs = fetch_random_negatives(3, excluir_ids=excluir) or []
+    neg_items: List[Dict[str, Any]] = []
+    for (nid, ntit, nart, sp, yt) in negs:
+        neg_items.append({
+            "id": int(nid),
+            "titulo": ntit or "",
+            "artista": nart or "",
+            "link": (sp or yt or ""),
+            "in_topk": 0
+        })
+
+    if not (rec_items and neg_items):
+        await msg.reply_text("⚠️ Não consegui montar os pares do teste agora. Voltando ao menu.", reply_markup=_menu_kb())
         return MENU
 
-    idx = st["idx"]
-    items = st["items"]
-    if idx >= len(items):
-        await context.bot.send_message(chat_id, "Obrigado! Agora, uma pergunta final de satisfação (NPS).")
-        await context.bot.send_message(chat_id, "De 0 a 10, o quanto você recomendaria o sistema para um amigo?",
-                                       reply_markup=_kb_ut_nps())
-        return UT_NPS
+    # guarda estado do teste em 2 fases
+    context.user_data["ut_state"] = {
+        "participant_id": str(context.user_data.get("user_pk") or context.user_data.get("email") or "anon"),
+        "seed_id": seed["seed_id"],
+        "seed_title": seed["seed_title"],
+        "rec_items": rec_items,
+        "neg_items": neg_items,
+        "rec_idx": 0,
+        "neg_idx": 0,
+        "phase": "rec",  # 'rec' -> depois 'neg'
+        "last_pair_row_id": None,
+        "seed_input_ref": payload.get("input_ref"),
+        "seed_result_json": json.dumps(payload.get("result_json") or {}),
+    }
 
-    c = items[idx]
-    titulo = c.get("titulo") or "(sem título)"
-    artista = c.get("artista") or ""
-    link = c.get("link") or ""
-    msg = f"🔊 *{titulo}* — {artista}\n"
-    if link:
-        msg += f"{link}\n"
-    msg += "Soa similar à *seed*?"
-    await context.bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=_kb_ut_yes_no_skip())
-    return UT_VOTE
+    # lista 1: recomendadas (antes das perguntas)
+    rec_list_text = _fmt_list(rec_items, "Lista de Músicas Recomendadas")
+    await msg.reply_text(rec_list_text, parse_mode="Markdown", disable_web_page_preview=False)
 
-async def ut_vote_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data or ""
-    if data not in {"ut:sim","ut:nao","ut:skip"}:
-        await safe_edit(q, "Entrada inválida."); 
-        return UT_VOTE
+    # dispara primeira pergunta da fase 'rec'
+    await ask_current_pair(msg, context)
+    return UT_PAIR
 
-    st = context.user_data.get("ut_state")
-    if not st:
-        await safe_edit(q, "Sessão de teste encerrada. Volte ao menu.", reply_markup=_menu_kb()); 
-        return MENU
+def _current_phase_and_item(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, Optional[Dict[str, Any]], int, int]:
+    """Retorna (phase, item, idx_atual, total_da_fase)."""
+    st = context.user_data.get("ut_state") or {}
+    phase = st.get("phase") or "rec"
+    if phase == "rec":
+        items = st.get("rec_items") or []
+        idx = int(st.get("rec_idx") or 0)
+        item = items[idx] if idx < len(items) else None
+        return "rec", item, idx, len(items)
+    else:
+        items = st.get("neg_items") or []
+        idx = int(st.get("neg_idx") or 0)
+        item = items[idx] if idx < len(items) else None
+        return "neg", item, idx, len(items)
 
-    idx = st["idx"]
-    items = st["items"]
-    if idx >= len(items):
-        await safe_edit(q, "Itens concluídos."); 
-        return UT_NPS
+async def ask_current_pair(msg, context: ContextTypes.DEFAULT_TYPE):
+    phase, item, idx, total = _current_phase_and_item(context)
+    st = context.user_data.get("ut_state") or {}
 
-    c = items[idx]
+    if item is None:
+        # terminou a fase atual
+        if phase == "rec":
+            # antes de ir para 'neg', mostre lista das não recomendadas
+            neg_items = st.get("neg_items") or []
+            neg_list_text = _fmt_list(neg_items, "Lista de Músicas Não Recomendadas")
+            await msg.reply_text(neg_list_text, parse_mode="Markdown", disable_web_page_preview=False)
+            # muda fase e pergunta o primeiro 'neg'
+            st["phase"] = "neg"
+            context.user_data["ut_state"] = st
+            return await ask_current_pair(msg, context)
 
-    # Se respondeu Sim/Não, grava par e pergunta força 1–5
-    if data in {"ut:sim","ut:nao"}:
-        user_sim = 1 if data == "ut:sim" else 0
-        try:
-            row_id = inserir_user_test_pair(
-                participant_id=st["participant_id"],
-                seed_id=st["seed_id"],
-                seed_title=st["seed_title"],
-                cand_id=int(c["id"]),
-                cand_title=f"{c.get('titulo','')} — {c.get('artista','')}".strip(" —"),
-                in_topk=int(c["in_topk"]),
-                user_sim=int(user_sim),
-            )
-            st["last_pair_row_id"] = int(row_id)
-        except Exception as e:
-            log.warning("Falha ao gravar par do user test: %s", e)
-            st["last_pair_row_id"] = None
-
-        # pergunta 1–5 (opcional)
-        try:
-            await q.edit_message_reply_markup(None)
-        except Exception:
-            pass
-        await q.message.reply_text(
-            "De 1 a 5, **quão parecido** você achou?",
-            parse_mode="Markdown",
-            reply_markup=_kb_ut_likert()
+        # terminou 'neg' também -> NPS final
+        await msg.reply_text(
+            "🔚 Quase lá! Agora, numa escala de 0 a 10, qual a probabilidade de você recomendar o FourierMatch a um amigo?",
+            reply_markup=_nps_0_10_kb()
         )
-        return UT_LIKERT
+        return UT_NPS_SCORE
 
-    # Se pulou, avança direto para o próximo item
-    st["idx"] += 1
-    try:
-        await q.edit_message_reply_markup(None)
-    except Exception:
-        pass
-    return await ut_send_next(update, context)
+    # pergunta do par atual
+    link = item.get("link") or ""
+    cab = "Avaliação (Recomendadas)" if phase == "rec" else "Avaliação (Não Recomendadas)"
+    txt = (
+        f"🎧 {cab} {idx+1}/{total}\n"
+        f"{item.get('titulo','')} — {item.get('artista','')}\n"
+        f"{('🔗 ' + link) if link else ''}\n\n"
+        f"👉 Você acha que esta música se parece com a que você mandou?"
+    ).strip()
+    await msg.reply_text(txt, reply_markup=_yesno_kb(idx), disable_web_page_preview=False)
+    return UT_PAIR
 
-async def ut_likert_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ut_pair_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    data = q.data or ""
-    if not data.startswith("ut:likert:"):
-        await safe_edit(q, "Entrada inválida.")
-        return UT_LIKERT
+    m = re.match(r"^ut:pair:(\d+):([01])$", q.data or "")
+    if not m:
+        await safe_edit(q, "Entrada inválida.", reply_markup=None); return UT_PAIR
+    idx_clicked = int(m.group(1)); user_sim = int(m.group(2))
+    st = context.user_data.get("ut_state") or {}
+    phase = st.get("phase") or "rec"
 
-    score_tok = data.split(":")[-1]
-    st = context.user_data.get("ut_state")
-    if not st:
-        await safe_edit(q, "Sessão de teste encerrada.", reply_markup=_menu_kb())
-        return MENU
+    # valida se índice clicado bate com o índice atual da fase
+    cur_phase, item, idx, total = _current_phase_and_item(context)
+    if phase != cur_phase or idx_clicked != idx or item is None:
+        await safe_edit(q, "Este item já foi processado.", reply_markup=None)
+        return await ask_current_pair(q.message, context)
 
-    # Atualiza a linha do par com o score 1–5 (se houver row_id)
-    if score_tok.isdigit():
+    c = item
+    try:
+        row_id = inserir_user_test_pair(
+            user_ref=_user_ref(context),
+            participant_id=st.get("participant_id") or "anon",
+            seed_id=st.get("seed_id"),
+            seed_title=st.get("seed_title"),
+            cand_id=int(c["id"]),
+            cand_title=f"{c.get('titulo','')} — {c.get('artista','')}".strip(" —"),
+            in_topk=int(c.get("in_topk") or (1 if phase == "rec" else 0)),
+            user_sim=int(user_sim),
+            input_ref=st.get("seed_input_ref"),
+            result_json=st.get("seed_result_json"),
+        )
+        context.user_data["ut_state"]["last_pair_row_id"] = int(row_id)
+        await safe_edit(q, "Obrigado! Agora dê uma nota de 1 a 5 para o quão similares são.", reply_markup=_likert_1_5_kb(int(row_id)))
+        return UT_SCORE
+    except Exception as e:
+        log.warning("Falha ao gravar par do user test: %s", e)
+        await safe_edit(q, "⚠️ Não consegui salvar este par, mas siga com a próxima avaliação.")
+        await q.message.reply_text("Dê uma nota de 1 a 5 para a similaridade:", reply_markup=_likert_1_5_kb(0))
+        return UT_SCORE
+
+async def ut_score_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    m = re.match(r"^ut:score:(\d+):([1-5])$", q.data or "")
+    if not m:
+        await safe_edit(q, "Entrada inválida."); return UT_PAIR
+    row_id = int(m.group(1))
+    score = int(m.group(2))
+
+    if row_id > 0:
         try:
-            if st.get("last_pair_row_id"):
-                update_user_test_pair_score(int(st["last_pair_row_id"]), int(score_tok))
+            update_user_test_pair_score(row_id, score)
         except Exception as e:
-            log.warning("Falha ao atualizar user_sim_score: %s", e)
-    # Se 'skip', não atualiza
+            log.warning("Falha ao gravar score do par: %s", e)
 
-    # Limpa e avança para a próxima candidata
-    st["last_pair_row_id"] = None
-    st["idx"] += 1
-    try:
-        await q.edit_message_reply_markup(None)
-    except Exception:
-        pass
-    return await ut_send_next(update, context)
+    # avança índice na fase corrente
+    st = context.user_data.get("ut_state") or {}
+    phase = st.get("phase") or "rec"
+    if phase == "rec":
+        st["rec_idx"] = int(st.get("rec_idx", 0)) + 1
+    else:
+        st["neg_idx"] = int(st.get("neg_idx", 0)) + 1
+    context.user_data["ut_state"] = st
 
-async def ut_nps_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await safe_edit(q, "✅ Registrado!")
+    return await ask_current_pair(q.message, context)
+
+async def ut_nps_score_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    if not (q.data or "").startswith("ut:nps:"):
-        await safe_edit(q, "Entrada inválida."); 
-        return UT_NPS
-    score = int(q.data.split(":")[2])
-    st = context.user_data.get("ut_state")
-    if not st:
-        await safe_edit(q, "Sessão de teste encerrada.", reply_markup=_menu_kb()); 
-        return MENU
+    m = re.match(r"^ut:nps:(\d{1,2})$", q.data or "")
+    if not m:
+        await safe_edit(q, "Entrada inválida."); return MENU
+    nps_val = int(m.group(1))
+    context.user_data["ut_nps_score"] = nps_val
+    await safe_edit(q, f"Valeu! Se quiser, deixe um comentário (opcional) sobre a experiência.\n\n"
+                       f"Digite sua mensagem aqui ou envie '-' para pular.")
+    return UT_NPS_COMMENT
 
-    st["nps_score"] = score
-    st["awaiting_comment"] = True
-    try:
-        await q.edit_message_reply_markup(None)
-    except Exception:
-        pass
-    await q.message.reply_text("Obrigado! Deixe um comentário (opcional). Envie em uma única mensagem.\nOu digite /pular para finalizar sem comentário.")
-    return UT_COMMENT
 
-async def ut_comment_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    st = context.user_data.get("ut_state")
-    if not st or not st.get("awaiting_comment"):
-        return  # ignora textos fora do fluxo
+
+async def ut_nps_comment_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     comment = (update.message.text or "").strip()
+    if comment == "-":
+        comment = None
+
+    st = context.user_data.get("ut_state") or {}
     try:
         inserir_user_test_nps(
-            participant_id=st["participant_id"],
-            seed_id=st["seed_id"],
-            seed_title=st["seed_title"],
-            nps_score=int(st["nps_score"]),
-            nps_comment=comment if comment else None
+            user_ref=_user_ref(context),
+            participant_id=st.get("participant_id") or "anon",
+            seed_id=st.get("seed_id"),
+            seed_title=st.get("seed_title"),
+            nps_score=int(context.user_data.get("ut_nps_score") or 0),
+            nps_comment=comment
         )
     except Exception as e:
         log.warning("Falha ao gravar NPS do user test: %s", e)
-    st["awaiting_comment"] = False
-    await update.message.reply_text("✅ Avaliação concluída. Obrigado! 🙌")
-    await update.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb())
+
+    # 🔻 LIMPA DOWNLOADS ANTES DE VOLTAR AO MENU
+    _cleanup_downloads_dir()
+
+    # limpa estado e volta ao menu
+    context.user_data.pop("ut_state", None)
+    context.user_data.pop("ut_nps_score", None)
+    await update.message.reply_text("🎉 Obrigado por participar! Voltando ao menu.", reply_markup=_menu_kb())
     return MENU
 
-async def ut_comment_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    st = context.user_data.get("ut_state")
-    if not st:
-        await update.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); 
-        return MENU
-    if st.get("awaiting_comment"):
-        try:
-            inserir_user_test_nps(
-                participant_id=st["participant_id"],
-                seed_id=st["seed_id"],
-                seed_title=st["seed_title"],
-                nps_score=int(st["nps_score"]),
-                nps_comment=None
-            )
-        except Exception as e:
-            log.warning("Falha ao gravar NPS (sem comentário): %s", e)
-        st["awaiting_comment"] = False
-        await update.message.reply_text("✅ Avaliação concluída. Obrigado! 🙌")
-    await update.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb())
-    return MENU
 
-# ---------- Cancel & Erros ----------
+# ---------- Cancel & Error ----------
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Sessão cancelada. 👋")
     return ConversationHandler.END
@@ -805,7 +757,6 @@ def main():
     if not token:
         raise SystemExit("Defina BOT_TOKEN no ambiente ou em app_v5/integrations/.env")
 
-    # Aumenta timeouts de rede para evitar ReadTimeout em conexões lentas
     request = HTTPXRequest(
         connect_timeout=float(os.getenv("TG_CONNECT_TIMEOUT", 20)),
         read_timeout=float(os.getenv("TG_READ_TIMEOUT", 60)),
@@ -815,7 +766,6 @@ def main():
 
     app = Application.builder().token(token).request(request).build()
 
-    # Filtro para Document de áudio (compat v20/v21)
     try:
         DOC_AUDIO_FILTER = filters.Document.AUDIO
     except Exception:
@@ -837,26 +787,15 @@ def main():
             GET_PLAYLIST:    [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_playlist)],
             GET_AUDIO:       [MessageHandler((filters.AUDIO | filters.VOICE | DOC_AUDIO_FILTER), handle_audio)],
             GET_SNIPPET:     [MessageHandler((filters.VOICE | filters.AUDIO | DOC_AUDIO_FILTER), handle_snippet)],
-            GET_RATING:      [CallbackQueryHandler(handle_rating_callback, pattern=r"^rate:[0-5]$")],
+
+            GET_RATING:      [CallbackQueryHandler(handle_rating_callback, pattern=r"^rate:[1-5]$")],
             GET_ALG:         [CallbackQueryHandler(handle_algvote_cb, pattern=r"^alg:")],
 
-            # =============== NOVOS ESTADOS DO TESTE COM USUÁRIO ===============
-            UT_CONSENT: [
-                CallbackQueryHandler(ut_consent_cb, pattern=r"^ut:consent:(ok|no)$")
-            ],
-            UT_VOTE: [
-                CallbackQueryHandler(ut_vote_cb, pattern=r"^ut:(sim|nao|skip)$")
-            ],
-            UT_LIKERT: [
-                CallbackQueryHandler(ut_likert_cb, pattern=r"^ut:likert:(\d|skip)$")
-            ],
-            UT_NPS: [
-                CallbackQueryHandler(ut_nps_cb, pattern=r"^ut:nps:\d+$")
-            ],
-            UT_COMMENT: [
-                CommandHandler("pular", ut_comment_skip),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ut_comment_text)
-            ],
+            # user test flow
+            UT_PAIR:         [CallbackQueryHandler(ut_pair_cb, pattern=r"^ut:pair:\d+:[01]$")],
+            UT_SCORE:        [CallbackQueryHandler(ut_score_cb, pattern=r"^ut:score:\d+:[1-5]$")],
+            UT_NPS_SCORE:    [CallbackQueryHandler(ut_nps_score_cb, pattern=r"^ut:nps:\d{1,2}$")],
+            UT_NPS_COMMENT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, ut_nps_comment_msg)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True

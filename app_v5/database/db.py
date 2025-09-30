@@ -7,21 +7,22 @@ import numpy as np
 import mysql.connector
 import json
 import logging
-
-# Normalização (acentos/caixa/espaços) para duplicidade
 import unicodedata, re, ast
 
 from app_v5.config import DB_CONFIG, DB_TABLE_NAME
 
 log = logging.getLogger("FourierMatch:DB")
 
+# =============================================================
+# Conexão
+# =============================================================
 def conectar():
     """Estabelece conexão com o banco de dados."""
     return mysql.connector.connect(**DB_CONFIG)
 
-# =========================================================
+# =============================================================
 # Normalização e checagem de duplicidade (sem alterar schema)
-# =========================================================
+# =============================================================
 _WS_RE = re.compile(r"\s+", flags=re.UNICODE)
 
 def _strip_accents_lower(s: str) -> str:
@@ -97,6 +98,9 @@ def musica_existe_por_meta(artist: Optional[str], title: Optional[str], album: O
             return int(r["id"])
     return None
 
+# =============================================================
+# CRUD de músicas e listagem
+# =============================================================
 def upsert_musica(
     nome: str,
     caracteristicas: np.ndarray,
@@ -188,7 +192,7 @@ def carregar_matriz() -> Tuple[np.ndarray, List[int], List[Dict[str, Any]]]:
     return np.asarray(feats, dtype=float), ids, metas
 
 # =============================================================
-# 2) OPERAÇÕES DE USUÁRIOS E NPS (existentes) + MIGRAÇÃO USER TEST
+# 2) Tabelas de usuários e NPS + migração das colunas do estudo
 # =============================================================
 TB_USUARIOS = "tb_usuarios"
 TB_NPS      = "tb_nps"
@@ -233,9 +237,7 @@ def _ensure_fk(cur, table: str, fk_name: str, col: str, ref_table: str, ref_col:
 
 def _ensure_user_test_columns(cur):
     """
-    Garante as colunas extras em tb_nps para armazenar:
-    - pares (event_type='pair'), com nota binária e Likert;
-    - NPS final da sessão (event_type='nps').
+    Garante colunas extras em tb_nps p/ teste com usuário e NPS final.
     """
     def _col_exists(table: str, col: str) -> bool:
         cur.execute(
@@ -249,35 +251,32 @@ def _ensure_user_test_columns(cur):
         try:
             cur.execute(sql)
         except Exception:
-            # se já existir / sem permissão, silencie para seguir
             pass
 
-    # Definições de coluna (sem IF NOT EXISTS)
-    if not _col_exists("tb_nps", "event_type"):
+    if not _col_exists(TB_NPS, "event_type"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN event_type ENUM('pair','nps') DEFAULT 'pair'")
-    if not _col_exists("tb_nps", "participant_id"):
+    if not _col_exists(TB_NPS, "participant_id"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN participant_id VARCHAR(64) NULL")
-    if not _col_exists("tb_nps", "seed_id"):
+    if not _col_exists(TB_NPS, "seed_id"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN seed_id INT NULL")
-    if not _col_exists("tb_nps", "seed_title"):
+    if not _col_exists(TB_NPS, "seed_title"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN seed_title VARCHAR(255) NULL")
-    if not _col_exists("tb_nps", "cand_id"):
+    if not _col_exists(TB_NPS, "cand_id"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN cand_id INT NULL")
-    if not _col_exists("tb_nps", "cand_title"):
+    if not _col_exists(TB_NPS, "cand_title"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN cand_title VARCHAR(255) NULL")
-    if not _col_exists("tb_nps", "in_topk"):
+    if not _col_exists(TB_NPS, "in_topk"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN in_topk TINYINT(1) NULL")
-    if not _col_exists("tb_nps", "user_sim"):
+    if not _col_exists(TB_NPS, "user_sim"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN user_sim TINYINT(1) NULL")
-    if not _col_exists("tb_nps", "user_sim_score"):
+    if not _col_exists(TB_NPS, "user_sim_score"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN user_sim_score TINYINT NULL")
-    if not _col_exists("tb_nps", "nps_score"):
+    if not _col_exists(TB_NPS, "nps_score"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN nps_score TINYINT NULL")
-    if not _col_exists("tb_nps", "nps_comment"):
+    if not _col_exists(TB_NPS, "nps_comment"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN nps_comment TEXT NULL")
-    if not _col_exists("tb_nps", "created_at"):
+    if not _col_exists(TB_NPS, "created_at"):
         _add_col("ALTER TABLE `tb_nps` ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP")
-
 
 def criar_tabela() -> None:
     """Cria as tabelas de usuários e NPS se não existirem + garante colunas do user test."""
@@ -320,9 +319,7 @@ def criar_tabela() -> None:
             _ensure_fk(cur, TB_NPS, "fk_nps_user", "user_id", TB_USUARIOS, "id")
             _ensure_fk(cur, TB_NPS, "fk_nps_music", "musica_id", TB_MUSICAS, mus_pk)
 
-            # 🔸 garante as colunas do estudo com usuário no MESMO tb_nps
             _ensure_user_test_columns(cur)
-
             conn.commit()
 
 def _resolve_user_pk(cur, user_ref: Union[int, str]) -> int:
@@ -350,11 +347,13 @@ def upsert_usuario(_ignored_user_id: Optional[int], fullname: Optional[str], ema
             row = cur.fetchone()
             if row:
                 return int(row[0])
-            cur.execute(f"INSERT INTO `{TB_USUARIOS}` (fullname, email, streaming_pref) VALUES (%s, %s, %s)",
-                        (fullname, email, streaming_pref))
+            cur.execute(f"INSERT INTO `{TB_USUARIOS}` (fullname, email, streaming_pref) VALUES (%s, %s, %s)", (fullname, email, streaming_pref))
             conn.commit()
             return int(cur.lastrowid)
 
+# =============================================================
+# 3) NPS (nota 0..5) + voto de algoritmo com UPSERT completo
+# =============================================================
 def upsert_nps(
     user_ref: Union[int, str],
     musica_id: int,
@@ -364,68 +363,117 @@ def upsert_nps(
     result_json: Optional[str] = None,
     alg_vencedor: Optional[str] = None
 ) -> Optional[int]:
-    # Mantém a regra existente (0..5). Ajuste se desejar 0..10 aqui também.
+    """
+    Upsert da linha NPS do par (user_id, musica_id), atualizando rating, channel,
+    input_ref, result_json e alg_vencedor (COALESCE para não apagar valor prévio).
+    """
     if not 0 <= int(rating) <= 5:
         raise ValueError("rating deve estar entre 0 e 5")
     with conectar() as conn:
         with conn.cursor() as cur:
             criar_tabela()
             fk_user = _resolve_user_pk(cur, user_ref)
-            cur.execute(f"SELECT 1 FROM `{TB_MUSICAS}` WHERE id=%s", (musica_id,))
+
+            cur.execute(f"SELECT 1 FROM `{TB_MUSICAS}` WHERE id=%s", (int(musica_id),))
             if not cur.fetchone():
                 raise ValueError(f"Música id={musica_id} não existe.")
+
             cur.execute(
                 f"""
-                INSERT INTO `{TB_NPS}` (user_id, musica_id, rating, channel, input_ref, result_json, alg_vencedor)
+                INSERT INTO `{TB_NPS}`
+                    (user_id, musica_id, rating, channel, input_ref, result_json, alg_vencedor)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
-                    rating=VALUES(rating), channel=VALUES(channel), input_ref=VALUES(input_ref),
-                    result_json=VALUES(result_json), alg_vencedor=COALESCE(VALUES(alg_vencedor), alg_vencedor),
-                    updated_at=CURRENT_TIMESTAMP
+                    rating       = VALUES(rating),
+                    channel      = VALUES(channel),
+                    input_ref    = VALUES(input_ref),
+                    result_json  = VALUES(result_json),
+                    alg_vencedor = COALESCE(VALUES(alg_vencedor), alg_vencedor),
+                    updated_at   = CURRENT_TIMESTAMP
                 """,
-                (fk_user, musica_id, int(rating), channel, input_ref, result_json, alg_vencedor)
+                (fk_user, int(musica_id), int(rating), channel, input_ref, result_json, alg_vencedor)
             )
             conn.commit()
-            cur.execute(f"SELECT id FROM `{TB_NPS}` WHERE user_id=%s AND musica_id=%s", (fk_user, musica_id))
+
+            cur.execute(
+                f"SELECT id FROM `{TB_NPS}` WHERE user_id=%s AND musica_id=%s",
+                (fk_user, int(musica_id))
+            )
             row = cur.fetchone()
             return int(row[0]) if row else None
 
 def update_nps_algoritmo(user_ref: Union[int, str], musica_id: int, choice: str) -> None:
+    """
+    Atualiza o campo alg_vencedor; se a linha ainda não existir, insere com rating neutro (3).
+    """
     with conectar() as conn:
         with conn.cursor() as cur:
+            criar_tabela()
             fk_user = _resolve_user_pk(cur, user_ref)
-            cur.execute(f"UPDATE `{TB_NPS}` SET alg_vencedor=%s, updated_at=CURRENT_TIMESTAMP "
-                        f"WHERE user_id=%s AND musica_id=%s", (choice, fk_user, int(musica_id)))
+
+            cur.execute(
+                f"""
+                UPDATE `{TB_NPS}`
+                   SET alg_vencedor=%s, updated_at=CURRENT_TIMESTAMP
+                 WHERE user_id=%s AND musica_id=%s
+                """,
+                (choice, fk_user, int(musica_id))
+            )
+
+            if cur.rowcount == 0:
+                cur.execute(
+                    f"""
+                    INSERT INTO `{TB_NPS}`
+                        (user_id, musica_id, rating, channel, input_ref, result_json, alg_vencedor)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (fk_user, int(musica_id), 3, "alg_vote", None, None, choice)
+                )
             conn.commit()
 
 # =============================================================
-# 3) FUNÇÕES do Teste com Usuário (lista cega)
+# 4) FUNÇÕES do Teste com Usuário (lista cega)
 # =============================================================
-def fetch_random_negatives(qtd: int, excluir_ids: List[int]) -> List[Tuple[int, str, str, Optional[str], Optional[str]]]:
+def fetch_random_negatives(qtd: int, excluir_ids: Optional[List[int]] = None) -> List[Tuple[int, str, str, Optional[str], Optional[str]]]:
     """
     Retorna até `qtd` registros aleatórios fora de `excluir_ids`.
     Colunas: id, titulo/nome, artista, link_spotify, link_youtube.
+    Apenas itens com pelo menos um link.
     """
-    if qtd <= 0:
-        return []
-    placeholders = ",".join(["%s"] * len(excluir_ids)) if excluir_ids else "NULL"
-    where_exclude = f"WHERE id NOT IN ({placeholders})" if excluir_ids else ""
-    sql = f"""
-        SELECT id,
-               COALESCE(titulo, nome) AS titulo,
-               COALESCE(artista, '') AS artista,
-               COALESCE(link_spotify, '') AS link_spotify,
-               COALESCE(link_youtube, '') AS link_youtube
-        FROM {DB_TABLE_NAME}
-        {where_exclude}
-        ORDER BY RAND()
-        LIMIT %s
-    """
+    excluir_ids = excluir_ids or []
     with conectar() as conn:
         with conn.cursor(dictionary=True) as cur:
-            params: Tuple[Any, ...] = tuple(excluir_ids) + (qtd,) if excluir_ids else (qtd,)
-            cur.execute(sql, params)
-            rows = cur.fetchall()
+            if excluir_ids:
+                ph = ",".join(["%s"] * len(excluir_ids))
+                cur.execute(
+                    f"""
+                    SELECT id,
+                           COALESCE(titulo, nome) AS titulo,
+                           COALESCE(artista, '') AS artista,
+                           link_spotify, link_youtube
+                      FROM {TB_MUSICAS}
+                     WHERE id NOT IN ({ph})
+                       AND (link_spotify IS NOT NULL OR link_youtube IS NOT NULL)
+                  ORDER BY RAND()
+                     LIMIT %s
+                    """,
+                    (*excluir_ids, int(qtd))
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT id,
+                           COALESCE(titulo, nome) AS titulo,
+                           COALESCE(artista, '') AS artista,
+                           link_spotify, link_youtube
+                      FROM {TB_MUSICAS}
+                     WHERE (link_spotify IS NOT NULL OR link_youtube IS NOT NULL)
+                  ORDER BY RAND()
+                     LIMIT %s
+                    """,
+                    (int(qtd),)
+                )
+            rows = cur.fetchall() or []
             out: List[Tuple[int, str, str, Optional[str], Optional[str]]] = []
             for r in rows:
                 out.append((
@@ -438,6 +486,7 @@ def fetch_random_negatives(qtd: int, excluir_ids: List[int]) -> List[Tuple[int, 
             return out
 
 def inserir_user_test_pair(
+    user_ref: Union[int, str],
     participant_id: str,
     seed_id: Optional[int],
     seed_title: Optional[str],
@@ -445,26 +494,59 @@ def inserir_user_test_pair(
     cand_title: str,
     in_topk: int,
     user_sim: int,
+    input_ref: Optional[str] = None,
+    result_json: Optional[str] = None,
 ) -> int:
     """
     Registra um julgamento de par seed×candidata na tb_nps e retorna o ID da linha.
-    Usa event_type='pair'.
+    Usa event_type='pair' e grava na MESMA tb_nps (respeitando UNIQUE (user_id,musica_id)).
     """
     with conectar() as conn:
         with conn.cursor() as cur:
             criar_tabela()
-            sql = """
-                INSERT INTO tb_nps
-                    (event_type, participant_id, seed_id, seed_title,
-                     cand_id, cand_title, in_topk, user_sim, created_at)
-                VALUES ('pair', %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            """
-            cur.execute(sql, (
-                participant_id, seed_id, seed_title,
-                cand_id, cand_title, in_topk, user_sim
-            ))
+            fk_user = _resolve_user_pk(cur, user_ref)
+
+            cur.execute(
+                f"""
+                INSERT INTO `{TB_NPS}` 
+                    (user_id, musica_id, rating, channel, event_type,
+                     participant_id, seed_id, seed_title, cand_id, cand_title,
+                     in_topk, user_sim, input_ref, result_json, created_at)
+                VALUES (%s, %s, %s, %s, 'pair',
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, NOW())
+                ON DUPLICATE KEY UPDATE
+                    event_type='pair',
+                    channel=VALUES(channel),
+                    participant_id=VALUES(participant_id),
+                    seed_id=VALUES(seed_id),
+                    seed_title=VALUES(seed_title),
+                    cand_id=VALUES(cand_id),
+                    cand_title=VALUES(cand_title),
+                    in_topk=VALUES(in_topk),
+                    user_sim=VALUES(user_sim),
+                    input_ref=VALUES(input_ref),
+                    result_json=VALUES(result_json),
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    fk_user, int(cand_id), 3, "user_test_pair",
+                    participant_id, seed_id, seed_title, int(cand_id), cand_title,
+                    int(in_topk), int(user_sim), input_ref, result_json
+                )
+            )
             conn.commit()
-            return int(cur.lastrowid)
+
+            rid = cur.lastrowid or 0
+            if not rid:
+                cur.execute(
+                    f"SELECT id FROM `{TB_NPS}` WHERE user_id=%s AND musica_id=%s ORDER BY id DESC LIMIT 1",
+                    (fk_user, int(cand_id))
+                )
+                row = cur.fetchone()
+                rid = int(row[0]) if row else 0
+            return int(rid) if rid else -1
+
 def update_user_test_pair_score(row_id: int, user_sim_score: int) -> None:
     """
     Atualiza a mesma linha do par com a nota 1–5 de similaridade.
@@ -472,13 +554,13 @@ def update_user_test_pair_score(row_id: int, user_sim_score: int) -> None:
     with conectar() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE tb_nps SET user_sim_score=%s WHERE id=%s AND event_type='pair'",
+                f"UPDATE `{TB_NPS}` SET user_sim_score=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                 (int(user_sim_score), int(row_id))
             )
             conn.commit()
 
-
 def inserir_user_test_nps(
+    user_ref: Union[int, str],
     participant_id: str,
     seed_id: Optional[int],
     seed_title: Optional[str],
@@ -486,25 +568,44 @@ def inserir_user_test_nps(
     nps_comment: Optional[str]
 ) -> None:
     """
-    Registra o NPS final da sessão do teste com usuários (0..10).
-    Usa event_type='nps'.
+    Registra o NPS final da sessão do teste com usuários (0..10) usando a linha do SEED.
     """
     with conectar() as conn:
         with conn.cursor() as cur:
             criar_tabela()
-            sql = """
-                INSERT INTO tb_nps
-                    (event_type, participant_id, seed_id, seed_title,
-                     nps_score, nps_comment)
-                VALUES ('nps', %s, %s, %s, %s, %s)
-            """
-            cur.execute(sql, (
-                participant_id, seed_id, seed_title, int(nps_score), nps_comment
-            ))
+            fk_user = _resolve_user_pk(cur, user_ref)
+
+            cur.execute(
+                f"""
+                UPDATE `{TB_NPS}`
+                   SET event_type='nps',
+                       channel='user_test_nps',
+                       participant_id=%s,
+                       seed_title=%s,
+                       nps_score=%s,
+                       nps_comment=%s,
+                       updated_at=CURRENT_TIMESTAMP
+                 WHERE user_id=%s AND musica_id=%s
+                """,
+                (participant_id, seed_title, int(nps_score), nps_comment, fk_user, int(seed_id or 0))
+            )
+
+            if cur.rowcount == 0 and seed_id:
+                cur.execute(
+                    f"""
+                    INSERT INTO `{TB_NPS}`
+                        (user_id, musica_id, rating, channel, event_type,
+                         participant_id, seed_id, seed_title, nps_score, nps_comment, created_at)
+                    VALUES (%s, %s, %s, %s, 'nps',
+                            %s, %s, %s, %s, %s, NOW())
+                    """,
+                    (fk_user, int(seed_id), 5, "user_test_nps",
+                     participant_id, int(seed_id), seed_title, int(nps_score), nps_comment)
+                )
             conn.commit()
 
 # =============================================================
-# 4) BACKFILL de metadados (mantido)
+# 5) BACKFILL de metadados (mantido)
 # =============================================================
 def fetch_musicas_sem_metadata(db_conn=None):
     conn = db_conn if db_conn else conectar()
@@ -544,28 +645,16 @@ def update_metadata_musica(id_musica: int, novo_titulo: Optional[str], novo_arti
             conn.close()
 
 def _formatar_generos_para_db(genero_input: Any) -> Optional[str]:
-    """
-    Converte uma lista de gêneros ou a representação em string de uma lista
-    para uma única string separada por vírgulas. Compatível com Python < 3.10.
-    """
     if genero_input is None:
         return None
-
     lista_generos = genero_input
-
-    # Se vier como string parecendo uma lista: "[...]", tenta fazer parse seguro
     if isinstance(genero_input, str) and genero_input.strip().startswith('[') and genero_input.strip().endswith(']'):
         try:
             lista_generos = ast.literal_eval(genero_input)
         except (ValueError, SyntaxError):
-            # fallback: remove colchetes e aspas sem quebrar
             s = genero_input.strip("[]").replace("'", "").replace('"', '').strip()
             return s or None
-
-    # Se for lista (de verdade), junta com vírgula
     if isinstance(lista_generos, list):
         return ", ".join(str(x).strip() for x in lista_generos if str(x).strip())
-
-    # Qualquer outro tipo: retorna como string simples
     s = str(lista_generos).strip()
     return s if s else None
