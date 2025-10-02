@@ -11,6 +11,7 @@ select	* from tb_nps;
 select * from tb_usuarios;
 
 
+
 SELECT * FROM tb_musicas WHERE link_spotify IS NULL; 
 SELECT * FROM tb_musicas WHERE link_youtube IS NULL;
 

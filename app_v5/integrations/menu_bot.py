@@ -14,8 +14,10 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from pydub import AudioSegment
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.error import TimedOut, RetryAfter, NetworkError
+from telegram.constants import ParseMode
+from telegram.error import TimedOut, RetryAfter, NetworkError, BadRequest
 from telegram.request import HTTPXRequest
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ConversationHandler, ContextTypes, filters
@@ -90,20 +92,36 @@ def _best_link(item: Dict[str, Any]) -> str:
     # item pode ser do resultado ou uma linha da tb_musicas
     return item.get("link") or item.get("spotify") or item.get("youtube") or ""
 
+# ALTERAÇÃO: Função modificada para exibir medalhas em vez de porcentagem
 def _fmt_items_text(items: list[dict]) -> str:
     if not items:
-        return "Nenhuma recomendação encontrada."
-    lines = ["🎯 Recomendações:", ""]
+        return "*Nenhuma recomendação encontrada\\.*"
+    
+    lines = ["*🎯 Recomendações:*", ""]
+    medals = ["🥇", "🥈", "🥉"]
+    
     for i, it in enumerate(items, 1):
-        sim = it.get("similaridade_fmt") or ""
         link = _best_link(it)
-        titulo = (it.get("titulo") or "").replace("\n", " ").strip()
-        artista = (it.get("artista") or "").replace("\n", " ").strip()
-        line = f"{i}. {titulo} — {artista} · {sim}"
+        titulo_esc = escape_markdown((it.get("titulo") or "").replace("\n", " ").strip(), version=2)
+        artista_esc = escape_markdown((it.get("artista") or "").replace("\n", " ").strip(), version=2)
+        
+        # Define o prefixo como medalha para os 3 primeiros, ou número para os demais
+        if i <= len(medals):
+            prefix = medals[i-1]
+        else:
+            prefix = f"{i}\\."
+        
+        # Constrói a linha sem a porcentagem de similaridade
+        line = f"{prefix} {titulo_esc} — {artista_esc}"
+        
         if link:
-            line += f"\n   {link}"
+            # Formata como um hyperlink clicável
+            escaped_link_text = escape_markdown(link, version=2)
+            line += f"\n   [{escaped_link_text}]({link})"
         lines.append(line)
+        
     return "\n".join(lines)
+
 
 def _fmt_table_rows_text(rows: list[dict]) -> str:
     cols = ["id", "titulo", "artista", "caminho", "created_at"]
@@ -161,17 +179,16 @@ def _skip_comment_kb():
         [InlineKeyboardButton("Pular comentário", callback_data="ut:nps_skip")]
     ])
 
-
 def _fmt_list(items: List[Dict[str, Any]], titulo: str) -> str:
-    # lista simples com bullets e link (se houver)
-    lines = [f"*{titulo}*"]
+    lines = [f"*{escape_markdown(titulo, version=2)}*"]
     for it in items:
-        t = (it.get("titulo") or "").strip()
-        a = (it.get("artista") or "").strip()
+        t = escape_markdown((it.get("titulo") or "").strip(), version=2)
+        a = escape_markdown((it.get("artista") or "").strip(), version=2)
         link = it.get("link") or ""
         bullet = f"• {t} — {a}"
         if link:
-            bullet += f"\n  {link}"
+            escaped_link_text = escape_markdown(link, version=2)
+            bullet += f"\n  [{escaped_link_text}]({link})"
         lines.append(bullet)
     return "\n".join(lines)
 
@@ -187,9 +204,9 @@ async def safe_edit(q, text: str, **kwargs):
         await asyncio.sleep(getattr(e, "retry_after", 2))
         try:
             return await q.edit_message_text(text, **kwargs)
-        except Exception:
-            pass
-    except (TimedOut, NetworkError):
+        except (BadRequest, TimedOut, NetworkError):
+             pass # Ignora erros se a segunda tentativa falhar
+    except (BadRequest, TimedOut, NetworkError):
         pass
     allowed = {k: v for k, v in kwargs.items() if k in {"reply_markup", "disable_web_page_preview", "parse_mode"}}
     return await q.message.reply_text(text, **allowed)
@@ -331,7 +348,13 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {r.get('message') or 'falha'}", reply_markup=_menu_kb()); return MENU
     q = r.get("query") or {}
     musica_id = int(q.get("id") or 0)
-    await update.message.reply_text(_fmt_items_text(r.get("items") or []), disable_web_page_preview=True)
+    
+    await update.message.reply_text(
+        _fmt_items_text(r.get("items") or []), 
+        parse_mode=ParseMode.MARKDOWN_V2, 
+        disable_web_page_preview=True
+    )
+    
     context.user_data["last_rate_payload"] = {
         "musica_id": musica_id, "channel": "youtube", "input_ref": text, "result_json": r
     }
@@ -380,7 +403,13 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {r.get('message') or 'falha'}", reply_markup=_menu_kb()); return MENU
     q = r.get("query") or {}
     musica_id = int(q.get("id") or 0)
-    await update.message.reply_text(_fmt_items_text(r.get("items") or []), disable_web_page_preview=True)
+    
+    await update.message.reply_text(
+        _fmt_items_text(r.get("items") or []), 
+        parse_mode=ParseMode.MARKDOWN_V2, 
+        disable_web_page_preview=True
+    )
+
     context.user_data["last_rate_payload"] = {
         "musica_id": musica_id, "channel": "audio_local", "input_ref": q.get("caminho",""), "result_json": r
     }
@@ -431,7 +460,13 @@ async def handle_snippet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if rec.get("status") == "ok":
             q = rec.get("query") or {}
             musica_id = int(q.get("id") or 0)
-            await msg.reply_text(_fmt_items_text(rec.get("items") or []), disable_web_page_preview=True)
+            
+            await msg.reply_text(
+                _fmt_items_text(rec.get("items") or []), 
+                parse_mode=ParseMode.MARKDOWN_V2, 
+                disable_web_page_preview=True
+            )
+            
             context.user_data["last_rate_payload"] = {
                 "musica_id": musica_id, "channel": "snippet", "input_ref": target, "result_json": rec
             }
@@ -511,14 +546,21 @@ async def handle_algvote_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(q, f"⚠️ Erro ao registrar voto: {e2}")
             await q.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
 
-    # ---- Inicia fluxo do teste com usuário (Top-3 → depois 3 negativos) ----
-    await start_user_test_flow(update, context)
-    return UT_PAIR
+    # ---- Inicia fluxo do teste com usuário em duas fases ----
+    return await start_user_test_flow(update, context)
 
-# ---------- Fluxo do Teste com Usuário (duas fases) ----------
+
+## --- INÍCIO: Lógica do Teste de Usuário (em duas fases) --- ##
 def _seed_info_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     q = payload.get("result_json", {}).get("query") or {}
+    # Tenta pegar título e artista; se não existirem, forma um título básico
     seed_title = f"{(q.get('titulo') or '').strip()} — {(q.get('artista') or '').strip()}".strip(" —")
+    
+    # Se o título ainda estiver vazio (caso do áudio local), usa uma referência alternativa
+    if not seed_title:
+        # Usa o input_ref (caminho do arquivo) como um identificador reserva
+        seed_title = (payload.get("input_ref") or "Áudio Local").split('/')[-1]
+
     return {
         "seed_id": int(q.get("id") or 0),
         "seed_title": seed_title,
@@ -578,11 +620,10 @@ async def start_user_test_flow(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # lista 1: recomendadas (antes das perguntas)
     rec_list_text = _fmt_list(rec_items, "Lista de Músicas Recomendadas")
-    await msg.reply_text(rec_list_text, parse_mode="Markdown", disable_web_page_preview=False)
+    await msg.reply_text(rec_list_text, parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True)
 
     # dispara primeira pergunta da fase 'rec'
-    await ask_current_pair(msg, context)
-    return UT_PAIR
+    return await ask_current_pair(msg, context)
 
 def _current_phase_and_item(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, Optional[Dict[str, Any]], int, int]:
     """Retorna (phase, item, idx_atual, total_da_fase)."""
@@ -609,7 +650,7 @@ async def ask_current_pair(msg, context: ContextTypes.DEFAULT_TYPE):
             # antes de ir para 'neg', mostre lista das não recomendadas
             neg_items = st.get("neg_items") or []
             neg_list_text = _fmt_list(neg_items, "Lista de Músicas Não Recomendadas")
-            await msg.reply_text(neg_list_text, parse_mode="Markdown", disable_web_page_preview=False)
+            await msg.reply_text(neg_list_text, parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True)
             # muda fase e pergunta o primeiro 'neg'
             st["phase"] = "neg"
             context.user_data["ut_state"] = st
@@ -622,17 +663,26 @@ async def ask_current_pair(msg, context: ContextTypes.DEFAULT_TYPE):
         )
         return UT_NPS_SCORE
 
-    # pergunta do par atual
-    link = item.get("link") or ""
     cab = "Avaliação (Recomendadas)" if phase == "rec" else "Avaliação (Não Recomendadas)"
+    titulo_esc = escape_markdown(item.get('titulo',''), version=2)
+    artista_esc = escape_markdown(item.get('artista',''), version=2)
+    link = item.get('link') or ""
+    
+    link_fmt = ""
+    if link:
+        escaped_link_text = escape_markdown(link, version=2)
+        link_fmt = f"🔗 [{escaped_link_text}]({link})"
+
     txt = (
-        f"🎧 {cab} {idx+1}/{total}\n"
-        f"{item.get('titulo','')} — {item.get('artista','')}\n"
-        f"{('🔗 ' + link) if link else ''}\n\n"
+        f"🎧 *{escape_markdown(cab, version=2)} {idx+1}/{total}*\n"
+        f"{titulo_esc} — {artista_esc}\n"
+        f"{link_fmt}\n\n"
         f"👉 Você acha que esta música se parece com a que você mandou?"
     ).strip()
-    await msg.reply_text(txt, reply_markup=_yesno_kb(idx), disable_web_page_preview=False)
+
+    await msg.reply_text(txt, reply_markup=_yesno_kb(idx), parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True)
     return UT_PAIR
+
 
 async def ut_pair_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -642,12 +692,11 @@ async def ut_pair_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "Entrada inválida.", reply_markup=None); return UT_PAIR
     idx_clicked = int(m.group(1)); user_sim = int(m.group(2))
     st = context.user_data.get("ut_state") or {}
-    phase = st.get("phase") or "rec"
 
     # valida se índice clicado bate com o índice atual da fase
-    cur_phase, item, idx, total = _current_phase_and_item(context)
-    if phase != cur_phase or idx_clicked != idx or item is None:
-        await safe_edit(q, "Este item já foi processado.", reply_markup=None)
+    cur_phase, item, current_idx, total = _current_phase_and_item(context)
+    if idx_clicked != current_idx or item is None:
+        await safe_edit(q, "Este item já foi processado ou a resposta está fora de ordem.", reply_markup=None)
         return await ask_current_pair(q.message, context)
 
     c = item
@@ -659,7 +708,7 @@ async def ut_pair_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             seed_title=st.get("seed_title"),
             cand_id=int(c["id"]),
             cand_title=f"{c.get('titulo','')} — {c.get('artista','')}".strip(" —"),
-            in_topk=int(c.get("in_topk") or (1 if phase == "rec" else 0)),
+            in_topk=int(c.get("in_topk") or (1 if cur_phase == "rec" else 0)),
             user_sim=int(user_sim),
             input_ref=st.get("seed_input_ref"),
             result_json=st.get("seed_result_json"),
@@ -690,10 +739,10 @@ async def ut_score_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # avança índice na fase corrente
     st = context.user_data.get("ut_state") or {}
-    phase = st.get("phase") or "rec"
+    phase, _, _, _ = _current_phase_and_item(context)
     if phase == "rec":
         st["rec_idx"] = int(st.get("rec_idx", 0)) + 1
-    else:
+    else: # neg
         st["neg_idx"] = int(st.get("neg_idx", 0)) + 1
     context.user_data["ut_state"] = st
 
@@ -708,7 +757,6 @@ async def ut_nps_score_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "Entrada inválida."); return MENU
     nps_val = int(m.group(1))
     context.user_data["ut_nps_score"] = nps_val
-
     await safe_edit(
         q,
         "Valeu! Se quiser, deixe um comentário (opcional) sobre a experiência.\n\n"
@@ -717,63 +765,43 @@ async def ut_nps_score_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return UT_NPS_COMMENT
 
-
-
 async def ut_nps_comment_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     comment = (update.message.text or "").strip()
     if comment == "-":
         comment = None
+    
+    await _save_nps_and_finish(update.message, context, comment)
+    return MENU
 
+async def ut_nps_skip_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    # Editamos a mensagem para remover o botão "Pular"
+    await safe_edit(q, "Obrigado por participar! Processando seu feedback final...")
+    await _save_nps_and_finish(q.message, context, None)
+    return MENU
+
+async def _save_nps_and_finish(message, context: ContextTypes.DEFAULT_TYPE, comment: Optional[str]):
     st = context.user_data.get("ut_state") or {}
+    nps_val = int(context.user_data.get("ut_nps_score") or 0)
     try:
         inserir_user_test_nps(
             user_ref=_user_ref(context),
             participant_id=st.get("participant_id") or "anon",
             seed_id=st.get("seed_id"),
             seed_title=st.get("seed_title"),
-            nps_score=int(context.user_data.get("ut_nps_score") or 0),
+            nps_score=nps_val,
             nps_comment=comment
         )
     except Exception as e:
         log.warning("Falha ao gravar NPS do user test: %s", e)
 
-    # 🔻 LIMPA DOWNLOADS ANTES DE VOLTAR AO MENU
-    _cleanup_downloads_dir()
-
     # limpa estado e volta ao menu
     context.user_data.pop("ut_state", None)
     context.user_data.pop("ut_nps_score", None)
-    await update.message.reply_text("🎉 Obrigado por participar! Voltando ao menu.", reply_markup=_menu_kb())
-    return MENU
-#---------------------------------
-async def ut_nps_skip_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    await message.reply_text("🎉 Obrigado por participar! Voltando ao menu.", reply_markup=_menu_kb())
 
-    st = context.user_data.get("ut_state") or {}
-    try:
-        inserir_user_test_nps(
-            user_ref=_user_ref(context),
-            participant_id=st.get("participant_id") or "anon",
-            seed_id=st.get("seed_id"),
-            seed_title=st.get("seed_title"),
-            nps_score=int(context.user_data.get("ut_nps_score") or 0),
-            nps_comment=None  # sem comentário
-        )
-    except Exception as e:
-        log.warning("Falha ao gravar NPS do user test (skip): %s", e)
-
-    # limpar downloads e estado, depois voltar ao menu
-    _cleanup_downloads_dir()
-    context.user_data.pop("ut_state", None)
-    context.user_data.pop("ut_nps_score", None)
-
-    await safe_edit(q, "🎉 Obrigado por participar! Voltando ao menu.", reply_markup=_menu_kb())
-    return MENU
-
-
-
-#_--------------
+## --- FIM: Lógica do Teste de Usuário --- ##
 
 # ---------- Cancel & Error ----------
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -781,14 +809,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Captura o erro para log, mas evita que o bot pare
+    log.error("Unhandled error: %s", context.error, exc_info=context.error)
     try:
-        import traceback
-        tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))
-        log.error("Unhandled error: %s\n%s", context.error, tb)
         if isinstance(update, Update) and update.effective_message:
             await update.effective_message.reply_text("⚠️ Ocorreu um erro temporário. Tente novamente.")
-    except Exception:
-        pass
+    except Exception as e:
+        log.error("Error while sending error message: %s", e)
+
 
 def main():
     token = os.getenv("BOT_TOKEN", "").strip()
@@ -833,7 +861,10 @@ def main():
             UT_PAIR:         [CallbackQueryHandler(ut_pair_cb, pattern=r"^ut:pair:\d+:[01]$")],
             UT_SCORE:        [CallbackQueryHandler(ut_score_cb, pattern=r"^ut:score:\d+:[1-5]$")],
             UT_NPS_SCORE:    [CallbackQueryHandler(ut_nps_score_cb, pattern=r"^ut:nps:\d{1,2}$")],
-            UT_NPS_COMMENT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, ut_nps_comment_msg)],
+            UT_NPS_COMMENT:  [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ut_nps_comment_msg),
+                CallbackQueryHandler(ut_nps_skip_cb, pattern=r"^ut:nps_skip$")
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True
