@@ -3,3 +3,4 @@ venv/
 .env
 .vscode
 __pycache__
+app_v5.zip
