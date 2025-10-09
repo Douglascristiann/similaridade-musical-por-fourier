@@ -20,7 +20,7 @@ FROM tb_musicas
 GROUP BY titulo
 HAVING COUNT(*) > 1;
 
-select COUNT(*) from tb_musicas where genero = 'Desconhecido';
+select COUNT(*) from tb_musicas where genero = '';
 
 CREATE TABLE tb_musicas_teste LIKE tb_musicas;
 
@@ -89,9 +89,11 @@ WHERE genero = '';
 #DROP TEMPORARY TABLE nova_ordem;
 
 #-- 7. Restaurar AUTO_INCREMENT
-#ALTER TABLE tb_musicas MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
+#ALTER TABLE tb_usuarios AUTO_INCREMENT = 0;
 
+#8 --- partir do ultimo id ajuste auto_increment
 
+#ALTER TABLE tb_musicas AUTO_INCREMENT = las;
 
 #--------------------------------------------------
 # outros

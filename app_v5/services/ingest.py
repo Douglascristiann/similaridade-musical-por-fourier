@@ -125,25 +125,25 @@ def _extract_entries_with_paths(ydl, info_obj) -> List[Dict[str, Any]]:
         out.append(resolve_one(info_obj))
     return out
 
+# app_v5/services/ingest.py
+
 def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) -> List[Dict[str, Any]]:
     try:
         import yt_dlp
     except Exception:
         log.error("❌ yt-dlp não está instalado. Instale com: pip install yt-dlp")
         return []
-        
+
     pasta_destino.mkdir(parents=True, exist_ok=True)
-    
+
+    # A linha "cookiefile" e o bloco "if not COOKIEFILE_PATH.exists()" foram removidos.
     ydl_opts = {
         "outtmpl": str(pasta_destino / "%(title)s-%(id)s.%(ext)s"),
         "noplaylist": not playlist, "quiet": True, "no_warnings": True,
-        "prefer_ffmpeg": True, "cookiefile": str(COOKIEFILE_PATH),
+        "prefer_ffmpeg": True,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
         "extract_flat": False, "skip_download": False, "default_search": "ytsearch",
     }
-
-    if not COOKIEFILE_PATH.exists():
-        ydl_opts.pop("cookiefile", None)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -152,7 +152,6 @@ def baixar_audio_youtube(url: str, pasta_destino: Path, playlist: bool = False) 
     except Exception as e:
         log.error(f"❌ Erro ao baixar: {e}")
         return []
-
 def processar_audio_local(
     arquivo: Path,
     origem_link: str | None = None,
