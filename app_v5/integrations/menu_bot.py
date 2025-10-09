@@ -40,15 +40,19 @@ log = logging.getLogger(__name__)
 load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
 
 # ---------- Estados ----------
+# Adicionado novo estado para o menu de administração
 (
     REGISTER_NAME, REGISTER_EMAIL, REGISTER_STREAM, MENU,
     GET_YT, GET_AUDIO, GET_SNIPPET, GET_PLAYLIST,
     GET_RATING, GET_ALG,
-    UT_PAIR, UT_SCORE, UT_NPS_SCORE, UT_NPS_COMMENT
-) = range(14)
+    UT_PAIR, UT_SCORE, UT_NPS_SCORE, UT_NPS_COMMENT,
+    GET_ADM_PASS, ADM_MENU
+) = range(16)
 
 K_DEFAULT = int(os.getenv("BOT_K", "3"))
 SR_DEFAULT = int(os.getenv("BOT_SR", "22050"))
+# Senha de administração
+ADMIN_PASS = "fft#admin"
 
 STREAM_CHOICES = [
     ("spotify",    "Spotify"),
@@ -58,16 +62,24 @@ STREAM_CHOICES = [
     ("other",      "Outra")
 ]
 
+# Modificado para incluir a opção de administração
 CLI_MENU_TEXT = (
     "🎧  === Menu Principal ===\n"
     "1) Processar áudio local\n"
     "2) Processar link do YouTube\n"
+    "7) Reconhecer trecho de áudio (Shazam)\n"
+    "A) Acessar área de ADM\n"
+    "0) Sair"
+)
+
+# Novo menu de administração
+ADMIN_MENU_TEXT = (
+    "⚙️ === Menu de Administração ===\n"
     "3) Upload em massa (pasta local)\n"
     "4) Recalibrar & Recomendar\n"
     "5) Playlist do YouTube (bulk)\n"
     "6) Listar últimos itens do banco\n"
-    "7) Reconhecer trecho de áudio (Shazam)\n"
-    "0) Sair"
+    "B) Voltar ao menu principal"
 )
 
 def _stream_kb():
@@ -75,17 +87,26 @@ def _stream_kb():
         [InlineKeyboardButton(lbl, callback_data=f"s_{key}")] for key, lbl in STREAM_CHOICES
     ])
 
+# Teclado do menu principal modificado
 def _menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("1) Áudio local", callback_data="m_1"),
          InlineKeyboardButton("2) Link YouTube", callback_data="m_2")],
-        [InlineKeyboardButton("3) Upload em massa (CLI)", callback_data="m_3")],
-        [InlineKeyboardButton("4) Recalibrar & Recomendar", callback_data="m_4")],
-        [InlineKeyboardButton("5) Playlist YouTube (bulk)", callback_data="m_5")],
-        [InlineKeyboardButton("6) Listar últimos", callback_data="m_6")],
         [InlineKeyboardButton("7) Trecho (Shazam)", callback_data="m_7")],
+        [InlineKeyboardButton("A) ADM", callback_data="m_adm")],
         [InlineKeyboardButton("0) Sair", callback_data="m_0")],
     ])
+
+# Novo teclado para o menu de administração
+def _adm_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("3) Upload em massa (CLI)", callback_data="adm_3")],
+        [InlineKeyboardButton("4) Recalibrar & Recomendar", callback_data="adm_4")],
+        [InlineKeyboardButton("5) Playlist YouTube (bulk)", callback_data="adm_5")],
+        [InlineKeyboardButton("6) Listar últimos", callback_data="adm_6")],
+        [InlineKeyboardButton("B) Voltar", callback_data="adm_back")],
+    ])
+
 
 # ---------- Formatadores ----------
 def _best_link(item: Dict[str, Any]) -> str:
@@ -274,29 +295,10 @@ async def menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "Envie um áudio (voice, .mp3, .wav...)."); return GET_AUDIO
     if data == "m_2":
         await safe_edit(q, "Envie o link do YouTube (vídeo único)."); return GET_YT
-    if data == "m_3":
-        await safe_edit(q, "Opção 3 (Upload em massa) é exclusiva da CLI.", reply_markup=_menu_kb()); return MENU
-    if data == "m_4":
-        await safe_edit(q, "🛠️ Recalibrando (ajustando scaler)…")
-        loop = asyncio.get_running_loop()
-        r = await loop.run_in_executor(None, recalibrate)
-        if r.get("status") == "ok":
-            await q.message.reply_text(
-                f"✅ Base calibrada: {r['itens']} faixas × {r['dim']} dims.\n"
-                f"Agora envie um áudio local (opção 1) para recomendar."
-            )
-        else:
-            await q.message.reply_text(f"❌ Erro ao recalibrar: {r.get('message')}")
-        await q.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
-    if data == "m_5":
-        await safe_edit(q, "Envie o link da playlist/álbum (YouTube)."); return GET_PLAYLIST
-    if data == "m_6":
-        rows = list_db(limit=20) or []
-        if not rows:
-            await safe_edit(q, "Banco vazio.", reply_markup=_menu_kb()); return MENU
-        await safe_edit(q, _fmt_table_rows_text(rows), reply_markup=_menu_kb()); return MENU
     if data == "m_7":
         await safe_edit(q, "Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
+    if data == "m_adm":
+        await safe_edit(q, "Digite a senha de administrador."); return GET_ADM_PASS
     if data == "m_0":
         await safe_edit(q, "Sessão encerrada. 👋"); return ConversationHandler.END
     await safe_edit(q, CLI_MENU_TEXT, reply_markup=_menu_kb())
@@ -308,8 +310,60 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Envie um áudio (voice, .mp3, .wav...)."); return GET_AUDIO
     if text == "2":
         await update.message.reply_text("Envie o link do YouTube (vídeo único)."); return GET_YT
+    if text == "7":
+        await update.message.reply_text("Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
+    if text.lower() == "a":
+        await update.message.reply_text("Digite a senha de administrador."); return GET_ADM_PASS
+    if text == "0" or text.lower() in {"sair","exit","quit"}:
+        await update.message.reply_text("Sessão encerrada. 👋"); return ConversationHandler.END
+    await update.message.reply_text("Envie uma opção válida do menu ou use os botões abaixo.", reply_markup=_menu_kb())
+    return MENU
+
+# ---------- Funções de Administração ----------
+async def handle_adm_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    password = (update.message.text or "").strip()
+    if password == ADMIN_PASS:
+        context.user_data["is_admin"] = True
+        await update.message.reply_text(ADMIN_MENU_TEXT, reply_markup=_adm_menu_kb())
+        return ADM_MENU
+    else:
+        await update.message.reply_text("Senha incorreta. Voltando ao menu principal.", reply_markup=_menu_kb())
+        return MENU
+
+async def adm_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data or ""
+    if data == "adm_3":
+        await safe_edit(q, "Opção 3 (Upload em massa) é exclusiva da CLI.", reply_markup=_adm_menu_kb()); return ADM_MENU
+    if data == "adm_4":
+        await safe_edit(q, "🛠️ Recalibrando (ajustando scaler)…")
+        loop = asyncio.get_running_loop()
+        r = await loop.run_in_executor(None, recalibrate)
+        if r.get("status") == "ok":
+            await q.message.reply_text(
+                f"✅ Base calibrada: {r['itens']} faixas × {r['dim']} dims.\n"
+                f"Agora envie um áudio local (opção 1) para recomendar."
+            )
+        else:
+            await q.message.reply_text(f"❌ Erro ao recalibrar: {r.get('message')}")
+        await q.message.reply_text(ADMIN_MENU_TEXT, reply_markup=_adm_menu_kb()); return ADM_MENU
+    if data == "adm_5":
+        await safe_edit(q, "Envie o link da playlist/álbum (YouTube)."); return GET_PLAYLIST
+    if data == "adm_6":
+        rows = list_db(limit=20) or []
+        if not rows:
+            await safe_edit(q, "Banco vazio.", reply_markup=_adm_menu_kb()); return ADM_MENU
+        await safe_edit(q, _fmt_table_rows_text(rows), reply_markup=_adm_menu_kb()); return ADM_MENU
+    if data == "adm_back":
+        await safe_edit(q, CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
+    await safe_edit(q, ADMIN_MENU_TEXT, reply_markup=_adm_menu_kb())
+    return ADM_MENU
+
+async def adm_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip()
     if text == "3":
-        await update.message.reply_text("Opção 3 (Upload em massa) é exclusiva da CLI.", reply_markup=_menu_kb()); return MENU
+        await update.message.reply_text("Opção 3 (Upload em massa) é exclusiva da CLI.", reply_markup=_adm_menu_kb()); return ADM_MENU
     if text == "4":
         await update.message.reply_text("🛠️ Recalibrando (ajustando scaler)…")
         loop = asyncio.get_running_loop()
@@ -321,20 +375,19 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(f"❌ Erro ao recalibrar: {r.get('message')}")
-        await update.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
+        await update.message.reply_text(ADMIN_MENU_TEXT, reply_markup=_adm_menu_kb()); return ADM_MENU
     if text == "5":
         await update.message.reply_text("Envie o link da playlist/álbum (YouTube)."); return GET_PLAYLIST
     if text == "6":
         rows = list_db(limit=20) or []
         if not rows:
-            await update.message.reply_text("Banco vazio.", reply_markup=_menu_kb()); return MENU
-        await update.message.reply_text(_fmt_table_rows_text(rows), reply_markup=_menu_kb()); return MENU
-    if text == "7":
-        await update.message.reply_text("Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
-    if text == "0" or text.lower() in {"sair","exit","quit"}:
-        await update.message.reply_text("Sessão encerrada. 👋"); return ConversationHandler.END
-    await update.message.reply_text("Envie uma opção válida do menu (0..7) ou use os botões abaixo.", reply_markup=_menu_kb())
-    return MENU
+            await update.message.reply_text("Banco vazio.", reply_markup=_adm_menu_kb()); return ADM_MENU
+        await update.message.reply_text(_fmt_table_rows_text(rows), reply_markup=_adm_menu_kb()); return ADM_MENU
+    if text.lower() == "b":
+        await update.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
+    await update.message.reply_text("Opção inválida. Use os botões.", reply_markup=_adm_menu_kb())
+    return ADM_MENU
+
 
 # ---------- Handlers principais ----------
 async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -853,6 +906,12 @@ def main():
             GET_PLAYLIST:    [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_playlist)],
             GET_AUDIO:       [MessageHandler((filters.AUDIO | filters.VOICE | DOC_AUDIO_FILTER), handle_audio)],
             GET_SNIPPET:     [MessageHandler((filters.VOICE | filters.AUDIO | DOC_AUDIO_FILTER), handle_snippet)],
+            GET_ADM_PASS:    [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_adm_pass)],
+
+            ADM_MENU: [
+                CallbackQueryHandler(adm_menu_cb, pattern=r"^adm_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, adm_menu_text),
+            ],
 
             GET_RATING:      [CallbackQueryHandler(handle_rating_callback, pattern=r"^rate:[1-5]$")],
             GET_ALG:         [CallbackQueryHandler(handle_algvote_cb, pattern=r"^alg:")],
