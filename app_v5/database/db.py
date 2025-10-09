@@ -658,3 +658,74 @@ def _formatar_generos_para_db(genero_input: Any) -> Optional[str]:
         return ", ".join(str(x).strip() for x in lista_generos if str(x).strip())
     s = str(lista_generos).strip()
     return s if s else None
+
+#-----------------------------------teste--------------------------------------
+
+def _execute_query(query: str, params: tuple = None, fetch: str = None, commit: bool = False, dictionary: bool = False):
+    """
+    Função central para executar queries no banco de dados.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = conectar() # Reutiliza sua função de conexão existente
+        if conn:
+            # O argumento 'dictionary=True' faz o cursor retornar dicts em vez de tuplas
+            cursor = conn.cursor(dictionary=dictionary)
+            cursor.execute(query, params or ())
+            
+            if commit:
+                conn.commit()
+                return cursor.lastrowid
+            
+            if fetch == "one":
+                return cursor.fetchone()
+            elif fetch == "all":
+                return cursor.fetchall()
+            
+            return None # Para operações que não retornam nada (ex: commit)
+    except mysql.connector.Error as err:
+        log.error(f"Erro no banco de dados: {err}")
+        return None
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
+def get_musicas_sem_genero() -> list[dict]:
+    """
+    Busca no banco de dados todas as músicas que não possuem um gênero definido.
+    """
+    query = """
+        SELECT id, artista, titulo, album
+        FROM tb_musicas
+        WHERE genero IS NULL OR genero = 'Desconhecido' OR genero = ''
+    """
+    # Usando 'dictionary=True' para obter resultados como dicionários
+    results = _execute_query(query, fetch="all", dictionary=True)
+    return results if results else []
+
+
+def update_musica_por_id(musica_id: int, dados: dict) -> None:
+    """
+    Atualiza colunas específicas de uma música no banco de dados pelo seu ID.
+    'dados' é um dicionário onde as chaves são os nomes das colunas.
+    """
+    if not dados:
+        return
+
+    # Constrói a parte SET da query dinamicamente
+    set_clause = ", ".join([f"{key} = %s" for key in dados.keys()])
+    
+    # Prepara os valores na ordem correta
+    valores = list(dados.values())
+    valores.append(musica_id) # Adiciona o ID no final para o WHERE
+
+    query = f"UPDATE tb_musicas SET {set_clause} WHERE id = %s"
+    
+    _execute_query(query, params=tuple(valores), commit=True)
+
+
+    
