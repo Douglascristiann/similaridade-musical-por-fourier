@@ -114,7 +114,7 @@ DB_USER=root
 DB_PASSWORD=manager
 DB_NAME=dbmusicadata
 # Tabela principal de músicas (ajuste conforme seu schema)
-DB_TABLE_NAME=tb_musicas_v4
+DB_TABLE_NAME=tb_musicas
 
 # --- Telegram Bot ---
 TELEGRAM_BOT_TOKEN=coloque_o_token_gerado_no_BotFather
