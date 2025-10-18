@@ -10,6 +10,60 @@ limit 3000;
 select	* from tb_nps;
 select * from tb_usuarios;
 
+SELECT
+    t1.id,
+    t1.user_id,
+    t1.musica_id,
+    t2.titulo,
+    t1.rating,
+    t1.channel,
+    t1.alg_vencedor,
+    t1.created_at,
+    t1.updated_at,
+    t1.event_type,
+    t1.participant_id,
+    t1.seed_id,
+    t1.seed_title,
+    t1.cand_id,
+    t1.cand_title,
+    t1.in_topk,
+    t1.user_sim,
+    t1.user_sim_score,
+    t1.nps_score,
+    t1.nps_comment
+FROM
+    tb_nps AS t1
+INNER JOIN
+    tb_musicas AS t2 ON t1.musica_id = t2.id;
+
+SELECT
+    t1.id,
+    t1.user_id,
+    t1.musica_id,
+    t1.rating,
+    t1.channel,
+    t1.alg_vencedor,
+    t1.created_at,
+    t1.updated_at,
+    t1.event_type,
+    t1.participant_id,
+    t1.seed_id,
+    t1.seed_title,
+    t1.cand_id,
+    t1.cand_title,
+    t1.in_topk,
+    t1.user_sim,
+    t1.user_sim_score,
+    t1.nps_score,
+    t1.nps_comment,
+    t2.titulo
+FROM
+    tb_nps AS t1
+INNER JOIN
+    tb_musicas AS t2 ON t1.musica_id = t2.id
+WHERE
+    t1.channel = 'user_test_nps';
+
 
 
 SELECT * FROM tb_musicas WHERE link_spotify IS NULL; 
