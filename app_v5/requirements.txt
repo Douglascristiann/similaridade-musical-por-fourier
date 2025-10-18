@@ -1,12 +1,10 @@
 numpy
 librosa
 soundfile
-pyloudnorm; python_version >= "3.8"
-python-dotenv
+python-dotenv>=1.0
 requests
 yt-dlp
 mysql-connector-python
 python-telegram-bot>=21.0
-python-dotenv>=1.0
 pydub>=0.25
-ffmpeg-python>=0.2
+shazamio
