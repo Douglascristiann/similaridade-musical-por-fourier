@@ -198,7 +198,7 @@ FLUSH PRIVILEGES;
 ```
 Ajuste `DB_HOST/DB_USER/DB_PASSWORD/DB_NAME` no `.env`.
 
-> **Schema**: o projeto costuma usar `tb_musicas_v4` (colunas como `id`, `nome`, `artista`,
+> **Schema**: o projeto costuma usar `tb_musicas` (colunas como `id`, `nome`, `artista`,
 > `titulo`, `album`, `genero`, `capa_album`, `features_json`, `created_at`, `updated_at`).  
 > Adapte ao seu contexto e configure `DB_TABLE_NAME` no `.env`.
 
