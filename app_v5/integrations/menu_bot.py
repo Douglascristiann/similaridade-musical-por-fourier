@@ -394,7 +394,7 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     if not text:
         await update.message.reply_text("Envie um link do YouTube."); return GET_YT
-    await update.message.reply_text("⏳ Baixando e recomendando…")
+    await update.message.reply_text("⏳ Analisando, aguarde… Tempo estimado 2 minutos.")
     loop = asyncio.get_running_loop()
     r = await loop.run_in_executor(None, recommend_from_youtube, text, K_DEFAULT, SR_DEFAULT)
     if r.get("status") != "ok":
