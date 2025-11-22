@@ -727,5 +727,20 @@ def update_musica_por_id(musica_id: int, dados: dict) -> None:
     
     _execute_query(query, params=tuple(valores), commit=True)
 
+# ---------------------- integração web----------------------------------
 
+def get_dashboard_stats():
+    """Busca estatísticas para o dashboard."""
+    with Session(engine) as session:
+        total_usuarios = session.query(func.count(Usuario.id)).scalar()
+        total_avaliacoes = session.query(func.count(NPS.id)).scalar()
+        media_avaliacoes = session.query(func.avg(NPS.rating)).scalar()
+        total_musicas = session.query(func.count(Musica.id)).scalar()
+
+        return {
+            "total_usuarios": total_usuarios or 0,
+            "total_avaliacoes": total_avaliacoes or 0,
+            "media_avaliacoes": round(media_avaliacoes, 2) if media_avaliacoes else 0,
+            "total_musicas": total_musicas or 0,
+        }
     
