@@ -1,14 +1,104 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Recomendação Musical</title>
+    <title>Uma Abordagem Baseada em Análise Espectral para Recomendação Musical</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <h1>Recomendação Musical</h1>
 
+    <header>
+        <div class="container">
+            <h1>Uma Abordagem Baseada em Análise Espectral para Recomendação Musical: Explorando a Transformada de Fourier como Alternativa aos Métodos Convencionais</h1>
+            <h2>Testes & Resultados</h2>
+        </div>
+    </header>
 
+    <main class="container charts-section">
+        <p style="text-align: center; font-size: 1.3em; font-weight: 300; margin-bottom: 40px;">
+            Clique em qualquer gráfico abaixo para expandir e visualizar em detalhes.
+        </p>
+
+        <div class="charts-grid">
+            
+            <div class="chart-card" onclick="openModal('figura_1.png', 'Distribuição de usuários por plataforma de streaming')">
+                <img src="figura_1.png" alt="Distribuição de usuários por plataforma de streaming">
+                <p>Figura 1: Distribuição de usuários por plataforma de streaming</p>
+            </div>
+
+            <div class="chart-card" onclick="openModal('figura_2.png', 'Top 8 gêneros principais no catálogo de músicas')">
+                <img src="figura_2.png" alt="Top 8 gêneros principais no catálogo de músicas">
+                <p>Figura 2: Top 8 gêneros principais no catálogo de músicas</p>
+            </div>
+
+            <div class="chart-card" onclick="openModal('figura_3.png', 'Comparação entre métricas obtidas e metas definidas')">
+                <img src="figura_3.png" alt="Comparação entre métricas obtidas e metas definidas">
+                <p>Figura 3: Comparação entre métricas obtidas e metas definidas</p>
+            </div>
+
+            <div class="chart-card" onclick="openModal('figura_4.png', 'Distribuição das notas de similaridade (1 a 5)')">
+                <img src="figura_4.png" alt="Distribuição das notas de similaridade (1 a 5)">
+                <p>Figura 4: Distribuição das notas de similaridade (1 a 5)</p>
+            </div>
+
+            <div class="chart-card" onclick="openModal('figura_5.png', 'Classificação NPS dos participantes')">
+                <img src="figura_5.png" alt="Classificação NPS dos participantes">
+                <p>Figura 5: Classificação NPS dos participantes</p>
+            </div>
+
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 Projeto de Recomendação Musical. Todos os direitos reservados.</p>
+        </div>
+    </footer>
+
+    <div id="imageModal" class="modal">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <img class="modal-content" id="expandedImg">
+    </div>
+
+    <script>
+        // Obtém o modal
+        const modal = document.getElementById("imageModal");
+        // Obtém o elemento <img> dentro do modal
+        const modalImg = document.getElementById("expandedImg");
+
+        /**
+         * Abre o modal com a imagem clicada.
+         * @param {string} src - O caminho (nome do arquivo) da imagem.
+         * @param {string} alt - O texto alternativo da imagem.
+         */
+        function openModal(src, alt) {
+            modal.style.display = "block";
+            modalImg.src = src;
+            modalImg.alt = alt;
+        }
+
+        /**
+         * Fecha o modal.
+         */
+        function closeModal() {
+            modal.style.display = "none";
+        }
+
+        // Fecha o modal ao pressionar a tecla ESC
+        document.addEventListener('keydown', function(event) {
+            if (event.key === "Escape" && modal.style.display === "block") {
+                closeModal();
+            }
+        });
+
+        // Fecha o modal ao clicar fora da imagem
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+    </script>
 
 </body>
 </html>
