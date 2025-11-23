@@ -10,7 +10,7 @@ import logging
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-
+#from app_v5.config import env as _env #import env
 from dotenv import load_dotenv
 from pydub import AudioSegment
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -67,19 +67,19 @@ CLI_MENU_TEXT = (
     "🎧  === Menu Principal ===\n"
     "1) Processar áudio local\n"
     "2) Processar link do YouTube\n"
-    "7) Reconhecer trecho de áudio (Shazam)\n"
-    "A) Acessar área de ADM\n"
+    "3) Reconhecer trecho de áudio (Shazam)\n"
+    "4) Acessar área de ADM\n"
     "0) Sair"
 )
 
 # Novo menu de administração
 ADMIN_MENU_TEXT = (
     "⚙️ === Menu de Administração ===\n"
-    "3) Upload em massa (pasta local)\n"
-    "4) Recalibrar & Recomendar\n"
-    "5) Playlist do YouTube (bulk)\n"
-    "6) Listar últimos itens do banco\n"
-    "B) Voltar ao menu principal"
+    "1) Upload em massa (pasta local)\n"
+    "2) Recalibrar & Recomendar\n"
+    "3) Playlist do YouTube (bulk)\n"
+    "4) Listar últimos itens do banco\n"
+    "0) Voltar ao menu principal"
 )
 
 def _stream_kb():
@@ -92,19 +92,19 @@ def _menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("1) Áudio local", callback_data="m_1"),
          InlineKeyboardButton("2) Link YouTube", callback_data="m_2")],
-        [InlineKeyboardButton("7) Trecho (Shazam)", callback_data="m_7")],
-        [InlineKeyboardButton("A) ADM", callback_data="m_adm")],
+        [InlineKeyboardButton("3) Trecho (Shazam)", callback_data="m_3")],
+        [InlineKeyboardButton("4) ADM", callback_data="m_adm")],
         [InlineKeyboardButton("0) Sair", callback_data="m_0")],
     ])
 
 # Novo teclado para o menu de administração
 def _adm_menu_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("3) Upload em massa (CLI)", callback_data="adm_3")],
-        [InlineKeyboardButton("4) Recalibrar & Recomendar", callback_data="adm_4")],
-        [InlineKeyboardButton("5) Playlist YouTube (bulk)", callback_data="adm_5")],
-        [InlineKeyboardButton("6) Listar últimos", callback_data="adm_6")],
-        [InlineKeyboardButton("B) Voltar", callback_data="adm_back")],
+        [InlineKeyboardButton("1) Upload em massa (CLI)", callback_data="adm_1")],
+        [InlineKeyboardButton("2) Recalibrar & Recomendar", callback_data="adm_2")],
+        [InlineKeyboardButton("3) Playlist YouTube (bulk)", callback_data="adm_3")],
+        [InlineKeyboardButton("4) Listar últimos", callback_data="adm_4")],
+        [InlineKeyboardButton("0) Voltar", callback_data="adm_back")],
     ])
 
 
@@ -114,35 +114,50 @@ def _best_link(item: Dict[str, Any]) -> str:
     return item.get("link") or item.get("spotify") or item.get("youtube") or ""
 
 # ALTERAÇÃO: Função modificada para exibir medalhas em vez de porcentagem
+def md2(text) -> str:
+    return escape_markdown(str(text), version=2)
+
 def _fmt_items_text(items: list[dict]) -> str:
     if not items:
         return "*Nenhuma recomendação encontrada\\.*"
-    
+
     lines = ["*🎯 Recomendações:*", ""]
     medals = ["🥇", "🥈", "🥉"]
-    
-    for i, it in enumerate(items, 1):
-        link = _best_link(it)
-        titulo_esc = escape_markdown((it.get("titulo") or "").replace("\n", " ").strip(), version=2)
-        artista_esc = escape_markdown((it.get("artista") or "").replace("\n", " ").strip(), version=2)
-        
-        # Define o prefixo como medalha para os 3 primeiros, ou número para os demais
-        if i <= len(medals):
-            prefix = medals[i-1]
-        else:
-            prefix = f"{i}\\."
-        
-        # Constrói a linha sem a porcentagem de similaridade
-        line = f"{prefix} {titulo_esc} — {artista_esc}"
-        
-        if link:
-            # Formata como um hyperlink clicável
-            escaped_link_text = escape_markdown(link, version=2)
-            line += f"\n   [{escaped_link_text}]({link})"
-        lines.append(line)
-        
-    return "\n".join(lines)
 
+    for i, it in enumerate(items, 1):
+        titulo = md2((it.get("titulo") or "").replace("\n", " ").strip())
+        artista_raw = (it.get("artista") or "").replace("\n", " ").strip()
+        artista = md2(artista_raw)
+
+        prefix = medals[i-1] if i <= len(medals) else f"{i}\\."
+        header = f"{prefix} *{titulo}*"
+        if artista_raw:
+            header += f"\n   _{artista}_"
+        lines.append(header)
+
+        # Links
+        s_link = it.get("spotify") or it.get("link_spotify")
+        y_link = it.get("youtube") or it.get("link_youtube")
+        generic = it.get("link") or it.get("caminho")
+
+        link_parts = []
+        if s_link:
+            link_parts.append(f"🎧 [Spotify]({s_link})")
+        if y_link:
+            link_parts.append(f"▶️ [YouTube]({y_link})")
+        if not link_parts and generic:
+            link_parts.append(f"[Abrir]({generic})")
+
+        if link_parts:
+            lines.append("   " + "  •  ".join(link_parts))
+
+        # Divisor visual entre itens
+        lines.append("┈" * 25)
+
+    if lines and lines[-1].startswith("┈"):
+        lines.pop()
+
+    return "\n".join(lines)
 
 def _fmt_table_rows_text(rows: list[dict]) -> str:
     cols = ["id", "titulo", "artista", "caminho", "created_at"]
@@ -295,7 +310,7 @@ async def menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "Envie um áudio (voice, .mp3, .wav...)."); return GET_AUDIO
     if data == "m_2":
         await safe_edit(q, "Envie o link do YouTube (vídeo único)."); return GET_YT
-    if data == "m_7":
+    if data == "m_3":
         await safe_edit(q, "Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
     if data == "m_adm":
         await safe_edit(q, "Digite a senha de administrador."); return GET_ADM_PASS
@@ -310,9 +325,9 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Envie um áudio (voice, .mp3, .wav...)."); return GET_AUDIO
     if text == "2":
         await update.message.reply_text("Envie o link do YouTube (vídeo único)."); return GET_YT
-    if text == "7":
+    if text == "3":
         await update.message.reply_text("Envie um trecho de áudio (até 30s)."); return GET_SNIPPET
-    if text.lower() == "a":
+    if text.lower() == "4":
         await update.message.reply_text("Digite a senha de administrador."); return GET_ADM_PASS
     if text == "0" or text.lower() in {"sair","exit","quit"}:
         await update.message.reply_text("Sessão encerrada. 👋"); return ConversationHandler.END
@@ -334,9 +349,9 @@ async def adm_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data or ""
-    if data == "adm_3":
-        await safe_edit(q, "Opção 3 (Upload em massa) é exclusiva da CLI.", reply_markup=_adm_menu_kb()); return ADM_MENU
-    if data == "adm_4":
+    if data == "adm_1":
+        await safe_edit(q, "Opção 1 ADM (Upload em massa) é exclusiva da CLI.", reply_markup=_adm_menu_kb()); return ADM_MENU
+    if data == "adm_2":
         await safe_edit(q, "🛠️ Recalibrando (ajustando scaler)…")
         loop = asyncio.get_running_loop()
         r = await loop.run_in_executor(None, recalibrate)
@@ -348,9 +363,9 @@ async def adm_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await q.message.reply_text(f"❌ Erro ao recalibrar: {r.get('message')}")
         await q.message.reply_text(ADMIN_MENU_TEXT, reply_markup=_adm_menu_kb()); return ADM_MENU
-    if data == "adm_5":
+    if data == "adm_4":
         await safe_edit(q, "Envie o link da playlist/álbum (YouTube)."); return GET_PLAYLIST
-    if data == "adm_6":
+    if data == "adm_4":
         rows = list_db(limit=20) or []
         if not rows:
             await safe_edit(q, "Banco vazio.", reply_markup=_adm_menu_kb()); return ADM_MENU
@@ -362,9 +377,9 @@ async def adm_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def adm_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
-    if text == "3":
+    if text == "1":
         await update.message.reply_text("Opção 3 (Upload em massa) é exclusiva da CLI.", reply_markup=_adm_menu_kb()); return ADM_MENU
-    if text == "4":
+    if text == "2":
         await update.message.reply_text("🛠️ Recalibrando (ajustando scaler)…")
         loop = asyncio.get_running_loop()
         r = await loop.run_in_executor(None, recalibrate)
@@ -376,14 +391,14 @@ async def adm_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(f"❌ Erro ao recalibrar: {r.get('message')}")
         await update.message.reply_text(ADMIN_MENU_TEXT, reply_markup=_adm_menu_kb()); return ADM_MENU
-    if text == "5":
+    if text == "3":
         await update.message.reply_text("Envie o link da playlist/álbum (YouTube)."); return GET_PLAYLIST
-    if text == "6":
+    if text == "4":
         rows = list_db(limit=20) or []
         if not rows:
             await update.message.reply_text("Banco vazio.", reply_markup=_adm_menu_kb()); return ADM_MENU
         await update.message.reply_text(_fmt_table_rows_text(rows), reply_markup=_adm_menu_kb()); return ADM_MENU
-    if text.lower() == "b":
+    if text.lower() == "0":
         await update.message.reply_text(CLI_MENU_TEXT, reply_markup=_menu_kb()); return MENU
     await update.message.reply_text("Opção inválida. Use os botões.", reply_markup=_adm_menu_kb())
     return ADM_MENU
@@ -394,7 +409,7 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     if not text:
         await update.message.reply_text("Envie um link do YouTube."); return GET_YT
-    await update.message.reply_text("⏳ Analisando, aguarde… Tempo estimado 2 minutos.")
+    await update.message.reply_text("⏳ Analisando, aguarde… Tempo estimado 2 minutos")
     loop = asyncio.get_running_loop()
     r = await loop.run_in_executor(None, recommend_from_youtube, text, K_DEFAULT, SR_DEFAULT)
     if r.get("status") != "ok":

@@ -228,6 +228,8 @@ def recommend_from_youtube(url: str, k: int = 3, sr: int = 22050) -> Dict[str, A
             "titulo": r.get("titulo") or r.get("nome") or "",
             "artista": r.get("artista") or "",
             "link": r.get("caminho") or r.get("link_spotify") or r.get("link_youtube") or "",
+            "spotify": (r.get("spotify") or r.get("link_spotify") or ""),
+            "youtube": (r.get("youtube") or r.get("link_youtube") or ""),
             "similaridade": float(r.get("similaridade") or 0.0),
             "similaridade_fmt": _fmt_pct(float(r.get("similaridade") or 0.0)),
         } for r in recs]
